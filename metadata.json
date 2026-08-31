@@ -1,0 +1,7 @@
+{
+  "name": "AI YouTube Studio",
+  "description": "Turn one YouTube video idea into a complete production-ready YouTube package.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
