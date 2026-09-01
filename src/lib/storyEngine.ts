@@ -423,7 +423,6 @@ export function extractAllAssetsUniversal(
 
   const instructions = (characterInstructions || settings.characterInstructions || '').trim();
   const storyNarrative = `${activeStory}\n${instructions}`.trim();
-  const lowerStory = storyNarrative.toLowerCase();
   const style = settings.visualStyle || '3D Cartoon';
   const lang = settings.language || 'English';
 
@@ -436,8 +435,13 @@ export function extractAllAssetsUniversal(
     return clean.length > 0 ? `${prefix}_${clean}` : prefix.toUpperCase();
   };
 
-  // Phrases and common grammatical words that must NEVER be extracted as character names
-  const STOP_PHRASES = new Set([
+  // -------------------------------------------------------------
+  // GENERIC LINGUISTIC RESOURCES (never tied to a specific story/name)
+  // -------------------------------------------------------------
+
+  // Common grammatical / filler words (English + romanized Hindi + Devanagari) that must
+  // NEVER be treated as a character name, however they are capitalized in the raw text.
+  const STOP_WORDS = new Set([
     'two friends', 'three friends', 'four friends', 'his friends', 'her friends', 'their friends',
     'my friends', 'best friends', 'good friends', 'the friends', 'friends', 'two sisters', 'three sisters',
     'the sisters', 'two brothers', 'the brothers', 'two companions', 'the companions', 'companions',
@@ -449,47 +453,98 @@ export function extractAllAssetsUniversal(
     'morning', 'evening', 'sunlight', 'forest', 'mountain', 'kingdom', 'world', 'realm', 'universe',
     'chapter', 'scene', 'act', 'title', 'idea', 'video', 'youtube', 'secret', 'ancient', 'city', 'ocean',
     'ek', 'do', 'teen', 'chaar', 'paanch', 'dono', 'sabhi', 'sab', 'unke', 'unka', 'unki', 'uske', 'uska', 'uski',
-    'humne', 'humein', 'humara', 'mera', 'meri', 'mere', 'aapka', 'aapke', 'tera', 'teri', 'tere', 'yeh', 'woh',
+    'unhe', 'unhi', 'unhone', 'inhe', 'humne', 'humein', 'humara', 'mera', 'meri', 'mere', 'aapka', 'aapke',
+    'tera', 'teri', 'tere', 'yeh', 'woh', 'wahan', 'yahan', 'jahan', 'kahan', 'tab', 'jab', 'phir',
     'kaha', 'kahaa', 'bole', 'boli', 'bola', 'kahaani', 'yatra', 'jungle', 'van', 'shehar', 'samundar', 'neeche',
     'upar', 'aage', 'peeche', 'andar', 'bahar', 'rahasya', 'rahasyamayi', 'sundar', 'chamakte', 'hue', 'roshni',
     'darwaza', 'darwaze', 'paas', 'pahunchti', 'pahunche', 'pahuncha', 'lekar', 'badhti', 'badhta', 'tairti', 'tairta',
-    'khul', 'jata', 'jati', 'uthta', 'uthti', 'poora', 'poori', 'behnein', 'behen', 'bhai', 'dost', 'mitra', 'saath',
-    'mein', 'ja', 'rahe', 'rahi', 'raha', 'tha', 'thi', 'the', 'hai', 'hain', 'hoon', 'karti', 'karta', 'karte',
+    'khul', 'jata', 'jati', 'jaate', 'jaata', 'jaati', 'uthta', 'uthti', 'poora', 'poori', 'behnein', 'behen', 'bhai',
+    'dost', 'mitra', 'saath', 'apne', 'mein', 'ja', 'rahe', 'rahi', 'raha', 'tha', 'thi', 'the', 'hai', 'hain',
+    'hoon', 'milti', 'milta', 'mile', 'mila', 'jiska', 'jiski', 'jiske', 'naam', 'karti', 'karta', 'karte',
     'karega', 'karegi', 'bhi', 'se', 'ki', 'ka', 'ke', 'ko', 'ne', 'aaj', 'kal', 'parso', 'yamuna', 'ganga',
     'kinare', 'jaana', 'aana', 'chahiye', 'muskuraya', 'muskurayi', 'badhne', 'laga', 'lagi', 'lage', 'achanak',
-    'subah', 'shaam', 'raat', 'dopahar', 'torch', 'gate', 'cave', 'light', 'door', 'path', 'vista'
+    'subah', 'shaam', 'raat', 'dopahar', 'torch', 'gate', 'cave', 'light', 'door', 'path', 'vista', 'mysterious',
+    'talking', 'purane', 'purani', 'purana', 'and', 'the', 'with', 'their', 'they', 'when', 'then', 'there',
+    'here', 'suddenly', 'finally', 'while', 'inside', 'outside', 'this', 'that', 'these', 'those',
   ]);
+
+  // Generic story-role / non-name descriptors that occasionally get capitalized mid-sentence
+  // (e.g. as the start of a translated clause) but are never proper nouns.
+  const GENERIC_ROLE_WORDS = new Set([
+    'boy', 'girl', 'man', 'woman', 'child', 'kid', 'friend', 'friends', 'sister', 'brother',
+    'guide', 'explorer', 'hero', 'heroine', 'protagonist', 'narrator', 'traveler', 'traveller',
+  ]);
+
+  // Generic creature / species vocabulary used ONLY to classify a character's TYPE once a
+  // name has already been discovered near it in the text. This is world-knowledge about
+  // common story creatures, not a lookup keyed on any particular character's name, so it
+  // generalizes to any story.
+  const SPECIES_LIBRARY: Array<{
+    pattern: RegExp;
+    species: string;
+    characterType: string;
+    appearanceHint: string;
+    furOrSkinHint: string;
+  }> = [
+    { pattern: /\bfox(?:es)?\b/i, species: 'Fox', characterType: 'Animal (Fox)', appearanceHint: 'sleek fox with a bushy tail and alert pointed ears', furOrSkinHint: 'Rich russet-orange fur with a white underbelly and dark paw markings' },
+    { pattern: /\bwolves|\bwolf\b/i, species: 'Wolf', characterType: 'Animal (Wolf)', appearanceHint: 'lean wolf with keen amber eyes', furOrSkinHint: 'Silvery-grey double-layered fur' },
+    { pattern: /\btigers?\b/i, species: 'Tiger', characterType: 'Animal (Tiger)', appearanceHint: 'powerful striped tiger', furOrSkinHint: 'Orange coat with bold black stripes' },
+    { pattern: /\blions?\b/i, species: 'Lion', characterType: 'Animal (Lion)', appearanceHint: 'noble maned lion', furOrSkinHint: 'Golden coat with a full mane' },
+    { pattern: /\bbears?\b/i, species: 'Bear', characterType: 'Animal (Bear)', appearanceHint: 'sturdy round-eared bear', furOrSkinHint: 'Thick honey-brown fur' },
+    { pattern: /\brabbits?\b|\bbunn(?:y|ies)\b/i, species: 'Rabbit', characterType: 'Animal (Rabbit)', appearanceHint: 'fluffy long-eared rabbit', furOrSkinHint: 'Soft cream-white fur with pink-lined ears' },
+    { pattern: /\bdogs?\b|\bpupp(?:y|ies)\b/i, species: 'Dog', characterType: 'Animal (Dog)', appearanceHint: 'friendly floppy-eared dog', furOrSkinHint: 'Short glossy fur' },
+    { pattern: /\bcats?\b|\bkitten(?:s)?\b/i, species: 'Cat', characterType: 'Animal (Cat)', appearanceHint: 'agile whiskered cat', furOrSkinHint: 'Sleek tabby fur' },
+    { pattern: /\bowls?\b/i, species: 'Owl', characterType: 'Animal (Owl)', appearanceHint: 'wise round-eyed owl', furOrSkinHint: 'Speckled tawny feathers' },
+    { pattern: /\bbirds?\b/i, species: 'Bird', characterType: 'Animal (Bird)', appearanceHint: 'small bright-plumed bird', furOrSkinHint: 'Vivid feathered plumage' },
+    { pattern: /\belephants?\b/i, species: 'Elephant', characterType: 'Animal (Elephant)', appearanceHint: 'gentle large-eared elephant', furOrSkinHint: 'Weathered grey hide' },
+    { pattern: /\bmonkeys?\b/i, species: 'Monkey', characterType: 'Animal (Monkey)', appearanceHint: 'agile long-tailed monkey', furOrSkinHint: 'Chestnut-brown fur' },
+    { pattern: /\bdeer\b/i, species: 'Deer', characterType: 'Animal (Deer)', appearanceHint: 'graceful antlered deer', furOrSkinHint: 'Fawn-brown coat with white spots' },
+    { pattern: /\bhorses?\b|\bpon(?:y|ies)\b/i, species: 'Horse', characterType: 'Animal (Horse)', appearanceHint: 'graceful long-maned horse', furOrSkinHint: 'Glossy chestnut coat' },
+    { pattern: /\bfish\b/i, species: 'Fish', characterType: 'Aquatic Creature', appearanceHint: 'shimmering scaled fish', furOrSkinHint: 'Iridescent scales' },
+    { pattern: /\bpenguins?\b/i, species: 'Penguin', characterType: 'Animal (Penguin)', appearanceHint: 'plump waddling penguin', furOrSkinHint: 'Black-and-white feathers' },
+    { pattern: /\bgiraffes?\b/i, species: 'Giraffe', characterType: 'Animal (Giraffe)', appearanceHint: 'tall spotted giraffe', furOrSkinHint: 'Golden coat with chestnut patches' },
+    { pattern: /\bdragons?\b/i, species: 'Dragon', characterType: 'Fantasy Creature (Dragon)', appearanceHint: 'majestic scaled dragon with folded wings', furOrSkinHint: 'Iridescent emerald scales' },
+    { pattern: /\brobot(?:s)?\b|\bandroid(?:s)?\b|\bA\.?I\.?\b/i, species: 'Robot', characterType: 'Robot', appearanceHint: 'sleek mechanical robot with glowing accents', furOrSkinHint: 'Brushed metal chassis with soft LED highlights' },
+    { pattern: /\baliens?\b/i, species: 'Alien', characterType: 'Alien', appearanceHint: 'otherworldly alien with luminous features', furOrSkinHint: 'Smooth iridescent skin' },
+    { pattern: /\bfair(?:y|ies)\b/i, species: 'Fairy', characterType: 'Fantasy Creature (Fairy)', appearanceHint: 'delicate winged fairy', furOrSkinHint: 'Glowing translucent skin with shimmering wings' },
+    { pattern: /\bmermaid(?:s)?\b/i, species: 'Mermaid', characterType: 'Fantasy Creature (Mermaid)', appearanceHint: 'graceful mermaid with a shimmering tail', furOrSkinHint: 'Iridescent scaled tail' },
+    { pattern: /\bunicorns?\b/i, species: 'Unicorn', characterType: 'Fantasy Creature (Unicorn)', appearanceHint: 'radiant horned unicorn', furOrSkinHint: 'Pearlescent white coat with a flowing mane' },
+    { pattern: /\bghosts?\b/i, species: 'Ghost', characterType: 'Fantasy Creature (Ghost)', appearanceHint: 'gentle translucent spirit', furOrSkinHint: 'Soft glowing translucent form' },
+    { pattern: /\bwitch(?:es)?\b/i, species: 'Human / Witch', characterType: 'Fantasy Being (Witch)', appearanceHint: 'mysterious witch in a flowing cloak', furOrSkinHint: 'Pale skin with a weathered, wise expression' },
+    { pattern: /\bwizard(?:s)?\b/i, species: 'Human / Wizard', characterType: 'Fantasy Being (Wizard)', appearanceHint: 'wise robed wizard', furOrSkinHint: 'Weathered skin with a long flowing beard' },
+  ];
+
+  // Generic markers that signal "this word introduces a name" (works for any language/name).
+  const NAME_INTRODUCTION_PATTERN = /(?:named|called|naam|jiska naam|jiski naam|jiske naam)\s+([A-Za-z][a-zA-Z]{1,20})\b/gi;
 
   interface DiscoveredEntity {
     rawName: string;
-    roleHint?: string;
-    typeHint?: string;
-    speciesHint?: string;
-    ageHint?: string;
-    genderHint?: string;
-    isInferred?: boolean;
-    inferredReason?: string;
+    firstIndex: number;
+    speciesMatch?: (typeof SPECIES_LIBRARY)[number];
+    contextWindow: string;
   }
 
   const discoveredEntities: Map<string, DiscoveredEntity> = new Map();
+  // Species mentions that were NOT explicitly given a proper name nearby (e.g. "a bunny hopped by").
+  const unnamedSpeciesUsed: Set<string> = new Set();
 
-  const addEntity = (
-    rawName: string,
-    roleHint?: string,
-    typeHint?: string,
-    speciesHint?: string,
-    ageHint?: string,
-    genderHint?: string,
-    isInferred = false,
-    inferredReason?: string
-  ) => {
+  const getContextWindow = (index: number, length: number) => {
+    const start = Math.max(0, index - 60);
+    const end = Math.min(storyNarrative.length, index + length + 60);
+    return storyNarrative.slice(start, end);
+  };
+
+  const addEntity = (rawName: string, index: number) => {
     const clean = rawName.trim().replace(/^[\s,.;:!?\-'"()]+|[\s,.;:!?\-'"()]+$/g, '');
     if (!clean || clean.length < 2) return;
     const lower = clean.toLowerCase();
 
-    // Check stop words
-    if (STOP_PHRASES.has(lower)) return;
+    if (STOP_WORDS.has(lower)) return;
+    if (GENERIC_ROLE_WORDS.has(lower)) return;
     if (/^(the|a|an|in|at|on|with|from|by|to|and|or|is|are|was|were|then|there|here|suddenly|finally|when|as|after|before|into|onto|their|his|her|its|our|your)$/i.test(clean)) return;
+    // Reject candidates that are actually generic species/common nouns (e.g. "Fox" at a
+    // sentence boundary) rather than a character's given name.
+    if (SPECIES_LIBRARY.some((s) => s.pattern.test(clean) && clean.length < 12 && new RegExp(`^${s.pattern.source}$`, 'i').test(clean))) return;
 
     // Do NOT extract if this word is merely the project title itself and not in the story text
     if (clean.toLowerCase() === idea.trim().toLowerCase() && !storyNarrative.includes(clean)) {
@@ -500,13 +555,8 @@ export function extractAllAssetsUniversal(
     if (!discoveredEntities.has(key)) {
       discoveredEntities.set(key, {
         rawName: clean,
-        roleHint,
-        typeHint,
-        speciesHint,
-        ageHint,
-        genderHint,
-        isInferred,
-        inferredReason,
+        firstIndex: index,
+        contextWindow: getContextWindow(index, clean.length),
       });
     }
   };
@@ -519,651 +569,187 @@ export function extractAllAssetsUniversal(
     for (const part of instructionParts) {
       const match = part.match(/^([A-Za-z\u0900-\u097F]+(?:\s+[A-Za-z\u0900-\u097F]+)?)(?:\s*\((.*?)\))?/);
       if (match && match[1]) {
-        const charName = match[1].trim();
-        const details = match[2] || '';
-        addEntity(charName, details.includes('guide') ? 'Guide' : 'Lead Protagonist', 'Character');
+        addEntity(match[1].trim(), storyNarrative.indexOf(match[1].trim()));
       }
     }
   }
 
   // -------------------------------------------------------------
-  // PASS 2: DEVANAGARI NAMED ENTITIES (Active Story Text Only)
+  // PASS 2: EXPLICIT "named X" / "naam X" INTRODUCTIONS (any language, any name)
   // -------------------------------------------------------------
-  if (storyNarrative.includes('राधा') || /\bradhas?\b/i.test(storyNarrative)) {
-    addEntity('Radha', 'Lead Protagonist & Heroine', 'Deity / Protagonist', 'Divine / Human', '16 years old', 'Female');
-  }
-  if (storyNarrative.includes('कृष्ण') || storyNarrative.includes('कान्हा') || /\bkrishnas?\b|\bkanhas?\b/i.test(storyNarrative)) {
-    addEntity('Krishna', 'Lead Protagonist & Hero', 'Deity / Protagonist', 'Divine / Human', '16 years old', 'Male');
-  }
-  if (storyNarrative.includes('बलराम') || storyNarrative.includes('दाऊ') || /\bbalrams?\b|\bbalarams?\b/i.test(storyNarrative)) {
-    addEntity('Balram', 'Elder Brother & Guardian', 'Deity / Guardian', 'Divine / Human', '18 years old', 'Male');
-  }
-  if (storyNarrative.includes('सुदामा') || /\bsudamas?\b/i.test(storyNarrative)) {
-    addEntity('Sudama', 'Devoted Companion', 'Human Companion', 'Human', '16 years old', 'Male');
-  }
-  if (storyNarrative.includes('चीकू') || /\bchikus?\b/i.test(storyNarrative)) {
-    addEntity('Chiku', 'Lead Child Protagonist & Explorer', 'Human Child', 'Human Child', '7 years old', 'Boy');
-  }
-  if (storyNarrative.includes('गोलू') || /\bgolus?\b/i.test(storyNarrative)) {
-    addEntity('Golu', 'Lead Companion', 'Human Child', 'Human Child', '8 years old', 'Boy');
-  }
-  if (storyNarrative.includes('मोलू') || /\bmolus?\b/i.test(storyNarrative)) {
-    addEntity('Molu', 'Playful Companion', 'Human Child', 'Human Child', '7 years old', 'Boy');
-  }
-
-  // -------------------------------------------------------------
-  // PASS 3: ENGLISH & MULTI-LINGUAL NAMED ENTITIES IN NARRATIVE
-  // -------------------------------------------------------------
-  const multiNameMatches = storyNarrative.matchAll(/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?)\s*,\s*([A-Z][a-z]+(?: [A-Z][a-z]+)?)(?:\s*,\s*([A-Z][a-z]+(?: [A-Z][a-z]+)?))?(?:\s*,?\s*(?:and|aur|va|tatha|or|&)\s+([A-Z][a-z]+(?: [A-Z][a-z]+)?))?/gi);
-  for (const match of multiNameMatches) {
-    if (match[1]) addEntity(match[1]);
-    if (match[2]) addEntity(match[2]);
-    if (match[3]) addEntity(match[3]);
-    if (match[4]) addEntity(match[4]);
-  }
-
-  const pairMatches = storyNarrative.matchAll(/\b([A-Z][a-z]+)\s+(?:and|aur|va|tatha|or|&)\s+([A-Z][a-z]+)\b/gi);
-  for (const match of pairMatches) {
-    if (match[1]) addEntity(match[1]);
-    if (match[2]) addEntity(match[2]);
-  }
-
-  const roleNamedMatches = storyNarrative.matchAll(/(?:named|called|sister|brother|friend|explorer|photographer|detective|scientist|captain|hero|princess|king|doctor)\s+([A-Z][a-z]+)\b/gi);
-  for (const match of roleNamedMatches) {
-    if (match[1]) addEntity(match[1]);
-  }
-
-  // Capitalized entity scanner across narrative
-  const capitalizedEntities = storyNarrative.matchAll(/\b([A-Z][a-z]{2,15})\b/g);
-  for (const match of capitalizedEntities) {
-    const word = match[1];
-    if (word && !STOP_PHRASES.has(word.toLowerCase())) {
-      addEntity(word);
+  for (const match of storyNarrative.matchAll(NAME_INTRODUCTION_PATTERN)) {
+    if (match[1] && match.index !== undefined) {
+      addEntity(match[1], match.index);
     }
   }
 
-  // Specific common story protagonist names
-  if (/\belenas?\b/i.test(storyNarrative)) {
-    addEntity('Elena', 'Elder Sister & Lead Explorer', 'Human Explorer', 'Human', '12 years old', 'Female');
+  // -------------------------------------------------------------
+  // PASS 3: PAIR / LIST NAME PATTERNS ("X aur Y", "X, Y and Z")
+  // -------------------------------------------------------------
+  const multiNameMatches = storyNarrative.matchAll(/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?)\s*,\s*([A-Z][a-z]+(?: [A-Z][a-z]+)?)(?:\s*,\s*([A-Z][a-z]+(?: [A-Z][a-z]+)?))?(?:\s*,?\s*(?:and|aur|va|tatha|or|&)\s+([A-Z][a-z]+(?: [A-Z][a-z]+)?))?/g);
+  for (const match of multiNameMatches) {
+    if (match.index === undefined) continue;
+    if (match[1]) addEntity(match[1], match.index);
+    if (match[2]) addEntity(match[2], match.index);
+    if (match[3]) addEntity(match[3], match.index);
+    if (match[4]) addEntity(match[4], match.index);
   }
-  if (/\bmayas?\b/i.test(storyNarrative)) {
-    addEntity('Maya', 'Younger Sister & Explorer', 'Human Explorer', 'Human', '8 years old', 'Female');
+
+  const pairMatches = storyNarrative.matchAll(/\b([A-Z][a-z]+)\s+(?:and|aur|va|tatha|or|&)\s+([A-Z][a-z]+)\b/g);
+  for (const match of pairMatches) {
+    if (match.index === undefined) continue;
+    if (match[1]) addEntity(match[1], match.index);
+    if (match[2]) addEntity(match[2], match.index);
   }
-  if (/\baaravs?\b/i.test(storyNarrative)) {
-    addEntity('Aarav', 'Lead Explorer', 'Human Explorer', 'Human', '14 years old', 'Male');
-  }
-  if (/\bpriyas?\b/i.test(storyNarrative)) {
-    addEntity('Priya', 'Science Specialist & Explorer', 'Human Specialist', 'Human', '14 years old', 'Female');
-  }
-  if (/\brohans?\b/i.test(storyNarrative)) {
-    addEntity('Rohan', 'Lead Explorer & Photographer', 'Human Explorer', 'Human', '25 years old', 'Male');
-  }
-  if (/\bananyas?\b/i.test(storyNarrative)) {
-    addEntity('Ananya', 'Navigator & Strategist', 'Human Navigator', 'Human', '14 years old', 'Female');
-  }
-  if (/\bliams?\b/i.test(storyNarrative)) {
-    addEntity('Liam', 'Lead Team Explorer', 'Human Explorer', 'Human', '14 years old', 'Male');
-  }
-  if (/\bsophias?\b/i.test(storyNarrative)) {
-    addEntity('Sophia', 'Science & Technology Lead', 'Human Specialist', 'Human', '14 years old', 'Female');
-  }
-  if (/\bnoahs?\b/i.test(storyNarrative)) {
-    addEntity('Noah', 'Navigation Specialist', 'Human Specialist', 'Human', '13 years old', 'Male');
-  }
-  if (/\bemmas?\b/i.test(storyNarrative)) {
-    addEntity('Emma', 'Naturalist & Communications Lead', 'Human Specialist', 'Human', '13 years old', 'Female');
+
+  const roleNamedMatches = storyNarrative.matchAll(/(?:named|called|sister|brother|friend|dost|explorer|photographer|detective|scientist|captain|hero|princess|king|doctor)\s+([A-Z][a-z]+)\b/gi);
+  for (const match of roleNamedMatches) {
+    if (match[1] && match.index !== undefined) addEntity(match[1], match.index);
   }
 
   // -------------------------------------------------------------
-  // PASS 4: ANIMAL & FABLE CHARACTERS IN STORY NARRATIVE
+  // PASS 4: GENERIC CAPITALIZED-WORD SCAN (catches any remaining proper noun)
+  // Every capitalized word is treated as a candidate name; common function/filler
+  // words (Hindi and English) are filtered out via STOP_WORDS / GENERIC_ROLE_WORDS
+  // regardless of where in the sentence they sit, since a positional heuristic
+  // alone would incorrectly reject genuine single-mention names that happen to
+  // start a sentence (e.g. "Balram unke saath tha.").
   // -------------------------------------------------------------
-  if (/\bbunn(?:y|ies)\b|\brabbits?\b/i.test(storyNarrative)) {
-    addEntity('Bunny', 'Animal Companion & Guide', 'Animal (Rabbit)', 'Rabbit', 'Young Bunny', 'Unspecified');
+  const capitalizedOccurrences: Map<string, number[]> = new Map();
+  for (const match of storyNarrative.matchAll(/\b([A-Z][a-z]{2,15})\b/g)) {
+    const word = match[1];
+    if (match.index === undefined) continue;
+    if (!capitalizedOccurrences.has(word)) capitalizedOccurrences.set(word, []);
+    capitalizedOccurrences.get(word)!.push(match.index);
   }
-  if (/\b(?:baby )?bear(?: cub)?\b/i.test(storyNarrative)) {
-    addEntity('Baby Bear', 'Animal Companion', 'Animal (Bear Cub)', 'Bear Cub', 'Baby Bear Cub', 'Male');
-  }
-  if (/\belephants?\b/i.test(storyNarrative)) {
-    addEntity('Baby Elephant', 'Animal Companion', 'Animal (Elephant)', 'Elephant', 'Baby Elephant', 'Unspecified');
-  }
-  if (/\bfish(?:es)?\b/i.test(storyNarrative)) {
-    addEntity('Colorful Fish', 'Undersea Companion Group', 'Aquatic Chorus', 'Tropical Fish', 'Ageless', 'Group');
-  }
-  if (/\bgiraffes?\b/i.test(storyNarrative)) {
-    addEntity('Friendly Giraffe', 'Savanna Guide', 'Animal (Giraffe)', 'Giraffe', 'Young Giraffe', 'Unspecified');
-  }
-  if (/\b(?:white )?pon(?:y|ies)\b|\bhorse\b/i.test(storyNarrative)) {
-    addEntity('White Pony', 'Gentle Steed Companion', 'Animal (Pony)', 'White Pony', 'Young Pony', 'Unspecified');
-  }
-  if (/\blions?\b/i.test(storyNarrative)) {
-    addEntity('Friendly Lion', 'Noble Companion', 'Animal (Lion)', 'Lion', 'Young Lion', 'Male');
-  }
-  if (/\bmonkeys?\b/i.test(storyNarrative)) {
-    addEntity('Playful Monkey', 'Acrobatic Companion', 'Animal (Monkey)', 'Monkey', 'Young Monkey', 'Male');
-  }
-  if (/\b(?:baby )?birds?\b/i.test(storyNarrative)) {
-    addEntity('Baby Birds', 'Avian Chorus', 'Animal (Songbirds)', 'Baby Birds', 'Fledglings', 'Group');
-  }
-  if (/\bowls?\b/i.test(storyNarrative)) {
-    addEntity('Friendly Owl', 'Wise Twilight Guide', 'Animal (Owl)', 'Owl', 'Wise Elder', 'Unspecified');
-  }
-  if (/\bpenguins?\b/i.test(storyNarrative)) {
-    addEntity('Cheerful Penguin', 'Snow Companion', 'Animal (Penguin)', 'Penguin', 'Young Penguin', 'Unspecified');
-  }
-  if (/\bqueens?\b/i.test(storyNarrative)) {
-    addEntity('Rainbow Queen', 'Royal Guardian', 'Royal Entity', 'Human / Royal', 'Adult', 'Female');
+
+  for (const [word, indices] of capitalizedOccurrences) {
+    if (STOP_WORDS.has(word.toLowerCase()) || GENERIC_ROLE_WORDS.has(word.toLowerCase())) continue;
+    addEntity(word, indices[0]);
   }
 
   // -------------------------------------------------------------
-  // PASS 5: INFERRED STORY CHARACTERS (e.g. "two sisters", "two friends")
-  // Only if no explicit names were discovered, but relational groups are described!
+  // PASS 5: SPECIES DETECTION FOR EACH DISCOVERED NAME
+  // Look at the text immediately around each discovered name for a generic
+  // creature/species keyword to determine its character type.
+  // -------------------------------------------------------------
+  for (const [, entity] of discoveredEntities) {
+    for (const speciesEntry of SPECIES_LIBRARY) {
+      if (speciesEntry.pattern.test(entity.contextWindow)) {
+        entity.speciesMatch = speciesEntry;
+        break;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // PASS 6: UNNAMED SPECIES MENTIONS (e.g. "a friendly bunny hopped along" with no
+  // proper name given anywhere nearby). Only added when NO discovered name in the
+  // story already claimed that species via PASS 5, so a named animal is never
+  // duplicated as a second, generic entity.
+  // -------------------------------------------------------------
+  const claimedSpecies = new Set(
+    Array.from(discoveredEntities.values())
+      .map((e) => e.speciesMatch?.species)
+      .filter(Boolean) as string[]
+  );
+  if (discoveredEntities.size === 0) {
+    for (const speciesEntry of SPECIES_LIBRARY) {
+      const match = speciesEntry.pattern.exec(storyNarrative);
+      if (match && !claimedSpecies.has(speciesEntry.species)) {
+        const genericName = speciesEntry.species;
+        discoveredEntities.set(`__species_${genericName.toLowerCase()}`, {
+          rawName: genericName,
+          firstIndex: match.index,
+          speciesMatch: speciesEntry,
+          contextWindow: getContextWindow(match.index, genericName.length),
+        });
+        claimedSpecies.add(genericName);
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // PASS 7: INFERRED STORY CHARACTERS (e.g. "two sisters", "two friends") — only
+  // used when nothing explicit was found at all, so the registry is never empty.
   // -------------------------------------------------------------
   if (discoveredEntities.size === 0 && storyNarrative.length > 0) {
     if (/\btwo sisters\b|\b2 sisters\b/i.test(storyNarrative)) {
-      addEntity('Elder Sister', 'Lead Protagonist & Elder Sister', 'Human Explorer', 'Human', '12 years old', 'Female', true, 'Inferred from story reference to two sisters');
-      addEntity('Younger Sister', 'Companion & Younger Sister', 'Human Explorer', 'Human', '8 years old', 'Female', true, 'Inferred from story reference to two sisters');
+      discoveredEntities.set('elder sister', { rawName: 'Elder Sister', firstIndex: 0, contextWindow: '' });
+      discoveredEntities.set('younger sister', { rawName: 'Younger Sister', firstIndex: 1, contextWindow: '' });
     } else if (/\btwo brothers\b|\b2 brothers\b/i.test(storyNarrative)) {
-      addEntity('Elder Brother', 'Lead Protagonist & Elder Brother', 'Human Explorer', 'Human', '14 years old', 'Male', true, 'Inferred from story reference to two brothers');
-      addEntity('Younger Brother', 'Companion & Younger Brother', 'Human Explorer', 'Human', '10 years old', 'Male', true, 'Inferred from story reference to two brothers');
+      discoveredEntities.set('elder brother', { rawName: 'Elder Brother', firstIndex: 0, contextWindow: '' });
+      discoveredEntities.set('younger brother', { rawName: 'Younger Brother', firstIndex: 1, contextWindow: '' });
+    } else if (/\btwo friends\b|\b2 friends\b/i.test(storyNarrative)) {
+      discoveredEntities.set('first friend', { rawName: 'First Friend', firstIndex: 0, contextWindow: '' });
+      discoveredEntities.set('second friend', { rawName: 'Second Friend', firstIndex: 1, contextWindow: '' });
     }
   }
 
   // -------------------------------------------------------------
-  // PASS 6: BUILD COMPLETE LOCKED INDIVIDUAL PROFILES
+  // PASS 8: BUILD COMPLETE LOCKED INDIVIDUAL PROFILES — driven entirely by the
+  // discovered name + detected species/gender/age hints, never by a lookup table
+  // keyed on the literal name. This is what makes the pipeline work for ANY story.
   // -------------------------------------------------------------
+  const orderedEntities = Array.from(discoveredEntities.values()).sort((a, b) => a.firstIndex - b.firstIndex);
+
   let entityIndex = 1;
-  for (const [, entity] of discoveredEntities) {
+  for (const entity of orderedEntities) {
     const name = entity.rawName;
-    const lowerName = name.toLowerCase();
+    const id = toStableId(`CHAR_${String(entityIndex).padStart(3, '0')}`, name);
+    const isAnimalOrCreature = Boolean(entity.speciesMatch);
+    const characterType = entity.speciesMatch?.characterType || 'Human';
+    const species = entity.speciesMatch?.species || 'Human';
 
-    let id = toStableId(`CHAR_${String(entityIndex).padStart(3, '0')}`, name);
-    let displayName = `${name}`;
-    let role = entity.roleHint || (entityIndex === 1 ? 'Lead Protagonist' : 'Supporting Companion');
-    let characterType = entity.typeHint || 'Human';
-    let species = entity.speciesHint || 'Human';
-    let age = entity.ageHint || '24 years old';
+    // Generic role/gender/age inference from local context only (never from a name table).
+    const ctxLower = entity.contextWindow.toLowerCase();
+    let gender: string = 'Unspecified';
+    if (/\b(he|his|boy|ladka|larka|male|beta|bhai)\b/.test(ctxLower)) gender = isAnimalOrCreature ? 'Male' : 'Male';
+    else if (/\b(she|her|girl|ladki|larki|female|beti|behen)\b/.test(ctxLower)) gender = isAnimalOrCreature ? 'Female' : 'Female';
+
     let ageCategory = 'Young Adult';
-    let gender = entity.genderHint || 'Unspecified';
-    let appearance = `${name} with distinctive features rendered in ${style} aesthetic.`;
-    let visualAppearance = `${name} in ${style}`;
-    let face = 'Expressive eyes, warm facial symmetry, natural confident gaze.';
-    let hair = 'Neatly styled hair framing face with realistic physics.';
-    let skin = 'Natural radiant tone with volumetric lighting.';
-    let body = 'Well-proportioned silhouette suited for animation.';
-    let clothing = `Signature tailored outfit in ${style}.`;
-    let clothingOutfit = clothing;
-    let accessories = 'Signature item and explorer gear.';
-    let signatureItem = accessories;
-    let personality = 'Brave, curious, loyal, and emotionally expressive.';
-    let personalityTraits = ['Curious', 'Brave', 'Kind', 'Loyal'];
-    let expressions = 'Warm reassuring smile, wide-eyed wonder, determined focus.';
-    let voice = `Clear articulate vocal enunciation in ${lang}.`;
-    let voiceStyle = `Warm and engaging delivery in ${lang}.`;
-    let speakingStyle = 'Natural, melodic cadence.';
-    let characterPurpose = 'Drive narrative momentum, visual continuity, and emotional connection.';
-    let lockedAttributes: string[] = ['Signature Outfit', 'Facial Geometry', 'Hairstyle / Fur'];
-
-    // ARCHETYPE PROFILE ENRICHMENTS
-    if (lowerName === 'radha') {
-      id = toStableId(`CHAR_${String(entityIndex).padStart(3, '0')}`, 'Radha');
-      displayName = 'Radha (Divine Heroine)';
-      role = 'Lead Protagonist';
-      characterType = 'Deity / Protagonist';
-      species = 'Divine / Human';
-      age = '16 years old';
-      ageCategory = 'Young Adult';
-      gender = 'Female';
-      appearance = `Radiant youthful maiden Radha with lotus-petal hazel eyes, glowing fair golden complexion, long cascading dark braid with fresh jasmine blossoms, wearing a vibrant turquoise and magenta lehenga with delicate golden embroidery and silver payal in ${style}.`;
-      visualAppearance = `Radha in turquoise and magenta lehenga with jasmine garland in ${style}`;
-      face = 'Lotus-petal hazel eyes with gentle kajal, sweet compassionate smile, delicate bindi.';
-      hair = 'Long lustrous dark-brown hair braided with fragrant white jasmine flowers.';
-      skin = 'Luminous fair golden complexion with warm heavenly glow.';
-      clothing = 'Vibrant turquoise choli and flowing magenta lehenga adorned with fine golden gota patti border, diaphanous dupatta.';
-      clothingOutfit = clothing;
-      accessories = 'Silver payal anklets, pearl necklace, delicate floral ear ornaments.';
-      signatureItem = accessories;
-      personality = 'Devoted, graceful, compassionate, radiant, and inspiring.';
-      personalityTraits = ['Graceful', 'Devoted', 'Compassionate', 'Joyful'];
-      voice = `Sweet, melodic, and serene voice in ${lang}.`;
-      lockedAttributes = ['Turquoise and magenta lehenga', 'Jasmine garland in dark braid', 'Lotus eyes and golden embroidery'];
-    } else if (lowerName === 'krishna' || lowerName === 'kanha') {
-      id = toStableId(`CHAR_${String(entityIndex).padStart(3, '0')}`, 'Krishna');
-      displayName = 'Krishna (Divine Hero)';
-      role = 'Lead Protagonist';
-      characterType = 'Deity / Protagonist';
-      species = 'Divine / Human';
-      age = '16 years old';
-      ageCategory = 'Young Adult';
-      gender = 'Male';
-      appearance = `Enchanting youthful prince Krishna with soft dark blue-cloud (Shyam) complexion, sparkling almond eyes full of gentle mischief, wearing a golden pitambar dhoti, ornate golden crown with a majestic peacock feather (mor pankh), and holding a polished bamboo flute (bansuri) in ${style}.`;
-      visualAppearance = `Krishna with blue-cloud complexion, peacock feather crown, and bamboo flute in ${style}`;
-      face = 'Mesmerizing almond eyes, playful benevolent smile, tilak on forehead.';
-      hair = 'Soft dark curly locks framing the forehead under golden headpiece.';
-      skin = 'Radiant soft cloud-blue (Shyamavarna) skin tone with celestial volumetric rim light.';
-      clothing = 'Gleaming yellow-gold silk pitambar dhoti with embroidered red waistband.';
-      clothingOutfit = clothing;
-      accessories = 'Peacock feather (mor pankh) in golden crown, polished bamboo flute (bansuri), vanamala garland.';
-      signatureItem = 'Polished bamboo flute (bansuri)';
-      personality = 'Playful, wise, benevolent, charming, and courageous.';
-      personalityTraits = ['Playful', 'Wise', 'Charming', 'Benevolent'];
-      voice = `Warm, soothing, and charismatic voice in ${lang}.`;
-      lockedAttributes = ['Cloud-blue Shyam skin', 'Peacock feather in crown', 'Yellow silk pitambar', 'Bamboo flute'];
-    } else if (lowerName === 'balram' || lowerName === 'balaram') {
-      id = toStableId(`CHAR_${String(entityIndex).padStart(3, '0')}`, 'Balram');
-      displayName = 'Balram (Mighty Guardian)';
-      role = 'Elder Brother & Guardian';
-      characterType = 'Deity / Guardian';
-      species = 'Divine / Human';
-      age = '18 years old';
-      ageCategory = 'Young Adult';
-      gender = 'Male';
-      appearance = `Stalwart, noble elder brother Balram with luminous fair-sand complexion, powerful athletic physique, wearing a deep indigo blue dhoti with golden borders, single diamond earring (kundal), and carrying a ceremonial wooden plough (hala) in ${style}.`;
-      visualAppearance = `Balram with fair complexion, indigo blue dhoti, and ceremonial hala in ${style}`;
-      face = 'Strong noble jawline, protective steady eyes, reassuring smile.';
-      hair = 'Thick dark wavy hair tied in a warrior knot with golden clip.';
-      skin = 'Fair radiant complexion with warm bronze highlights.';
-      clothing = 'Deep royal indigo silk dhoti with golden embroidery, royal silk sash.';
-      clothingOutfit = clothing;
-      accessories = 'Single golden kundal earring, ornate armlets, ceremonial wooden hala.';
-      signatureItem = 'Ceremonial wooden plough (hala)';
-      personality = 'Protective, righteous, strong, loyal, and dependable.';
-      personalityTraits = ['Protective', 'Righteous', 'Strong', 'Loyal'];
-      voice = `Deep, resonant, and reassuring voice in ${lang}.`;
-      lockedAttributes = ['Indigo silk dhoti', 'Fair complexion with warrior knot', 'Ceremonial hala'];
-    } else if (lowerName === 'chiku') {
-      id = 'MAIN_CHILD_HERO';
-      displayName = 'Chiku (Lead Protagonist)';
-      role = 'Lead Protagonist & Guide';
-      characterType = 'Human Child';
-      species = 'Human Child';
-      age = '7 years old';
+    let age = '20 years old';
+    if (/\b(child|kid|bachcha|bachcha|young|chota|choti)\b/.test(ctxLower)) {
       ageCategory = 'Child';
-      gender = 'Boy';
-      appearance = `Energetic, charming 7yo child Chiku in blue denim overalls with vibrant yellow hooded shirt, bright red sneakers, joyful sparkling hazel eyes, and playful tousled brown hair in ${style}.`;
-      visualAppearance = `7yo Chiku in blue overalls, yellow hoodie, red sneakers in ${style}`;
-      face = 'Bright sparkling hazel eyes, rosy cheeks, enthusiastic welcoming smile.';
-      hair = 'Playful tousled warm-brown hair.';
-      skin = 'Warm radiant child skin tone.';
-      clothing = 'Blue denim overalls with brass buttons over a bright yellow hoodie, red canvas sneakers.';
-      clothingOutfit = clothing;
-      accessories = 'Magic Alphabet Explorer Badge pinned to overalls.';
-      signatureItem = 'Magic Explorer Badge';
-      personality = 'Curious, fearless, joyful, welcoming, and expressive.';
-      personalityTraits = ['Curious', 'Joyful', 'Adventurous', 'Caring'];
-      voice = `Clear, joyful child enunciation in ${lang}.`;
-      lockedAttributes = ['Blue denim overalls', 'Yellow hoodie', 'Red sneakers', 'Tousled brown hair'];
-    } else if (lowerName === 'bunny') {
-      id = 'BUNNY_FRIEND';
-      displayName = 'Bunny (Animal Companion)';
-      role = 'Animal Companion & Guide';
-      characterType = 'Animal (Rabbit)';
-      species = 'Rabbit';
-      age = 'Young Bunny';
-      ageCategory = 'Child';
-      gender = 'Unspecified';
-      appearance = `Adorably fluffy snowy-white bunny with tall perky pink-lined ears, round button nose, big glossy dark eyes, wearing a tiny teal satin bow tie in ${style}.`;
-      visualAppearance = `Fluffy white bunny with pink-lined ears and teal bow tie in ${style}`;
-      face = 'Cheery whiskers, twitching pink nose, glossy curious eyes.';
-      hair = 'Plush cloud-soft white fur with micro-fiber groom rendering.';
-      clothing = 'Tiny teal satin bow tie around neck.';
-      clothingOutfit = clothing;
-      accessories = 'Teal satin bow tie and small wicker basket of strawberries.';
-      signatureItem = 'Teal satin bow tie';
-      personality = 'Playful, bouncy, affectionate, and cheerful.';
-      personalityTraits = ['Playful', 'Bouncy', 'Affectionate'];
-      lockedAttributes = ['Snow white fluffy fur', 'Pink inner ears', 'Teal satin bow tie'];
-    } else if (lowerName === 'baby bear') {
-      id = 'BABY_BEAR_FRIEND';
-      displayName = 'Baby Bear (Animal Companion)';
-      role = 'Animal Companion';
-      characterType = 'Animal (Bear Cub)';
-      species = 'Bear Cub';
-      age = 'Baby Bear Cub';
-      ageCategory = 'Child';
-      gender = 'Male';
-      appearance = `Plush honey-caramel brown baby bear cub with round ears, honey-colored muzzle, soft button nose, wearing a cozy red-and-white knitted scarf in ${style}.`;
-      visualAppearance = `Caramel baby bear with striped scarf in ${style}`;
-      face = 'Warm teddy-bear smile, twinkling dark eyes, soft velvet nose.';
-      hair = 'Dense velvety caramel-brown fur.';
-      clothing = 'Red-and-white striped woolen knit scarf.';
-      clothingOutfit = clothing;
-      accessories = 'Red-and-white striped scarf and miniature wooden honey spoon.';
-      signatureItem = 'Red-and-white striped scarf';
-      personality = 'Gentle, cuddly, loyal, and friendly.';
-      personalityTraits = ['Gentle', 'Cuddly', 'Loyal'];
-      lockedAttributes = ['Caramel brown fur', 'Red-and-white striped scarf'];
-    } else if (lowerName === 'baby elephant') {
-      id = 'BABY_ELEPHANT';
-      displayName = 'Baby Elephant (Animal Companion)';
-      role = 'Animal Companion';
-      characterType = 'Animal (Elephant)';
-      species = 'Asian Elephant';
-      age = 'Baby Elephant';
-      ageCategory = 'Child';
-      gender = 'Unspecified';
-      appearance = `Charming pastel sky-blue baby elephant with oversized gentle floppy ears with pink inner shading, friendly curved trunk, and shiny golden ankle bangles in ${style}.`;
-      visualAppearance = `Sky-blue baby elephant with pink inner ears in ${style}`;
-      clothing = 'Tiny yellow saddle cloth with rainbow embroidered border.';
-      clothingOutfit = clothing;
-      accessories = 'Yellow embroidered saddle cloth and golden ankle bangles.';
-      signatureItem = 'Yellow embroidered saddle cloth';
-      personality = 'Playful, joyful, gentle, and musical.';
-      personalityTraits = ['Playful', 'Joyful', 'Gentle'];
-      lockedAttributes = ['Sky-blue skin', 'Pink-lined ears', 'Yellow saddle cloth'];
-    } else if (lowerName === 'colorful fish') {
-      id = 'COLORFUL_FISH_GROUP';
-      displayName = 'Colorful Fish Group';
-      role = 'Undersea Chorus';
-      characterType = 'Aquatic Group';
-      species = 'Tropical Fish';
-      age = 'Group';
+      age = '9 years old';
+    }
+    if (isAnimalOrCreature) {
       ageCategory = 'Ageless';
-      gender = 'Group';
-      appearance = `Vibrant trio of friendly tropical cartoon fish (tangerine orange, electric blue, and sunny yellow) with sparkling scales, iridescent translucent fins, and happy smiling eyes in ${style}.`;
-      visualAppearance = `Trio of bright orange, blue, and yellow tropical fish in ${style}`;
-      clothing = 'Iridescent natural scales with shimmering stardust fin borders.';
-      clothingOutfit = clothing;
-      accessories = 'Glittering stardust water bubbles.';
-      signatureItem = 'Glittering stardust bubbles';
-      personality = 'Synchronized, rhythmic, playful underwater dancers.';
-      personalityTraits = ['Rhythmic', 'Playful', 'Harmonious'];
-      lockedAttributes = ['Trio orange/blue/yellow scales', 'Translucent glittering fins'];
-    } else if (lowerName === 'friendly giraffe') {
-      id = 'FRIENDLY_GIRAFFE';
-      displayName = 'Friendly Giraffe';
-      role = 'Savanna Guide';
-      characterType = 'Animal (Giraffe)';
-      species = 'Giraffe';
-      age = 'Young Giraffe';
-      ageCategory = 'Child';
-      gender = 'Unspecified';
-      appearance = `Cheerful warm-golden cartoon giraffe with soft chestnut-brown star spots, gentle oversized eyelashes, and a bright leafy green neck scarf in ${style}.`;
-      visualAppearance = `Golden giraffe with star spots and green scarf in ${style}`;
-      clothing = 'Bright emerald-green silk neck scarf.';
-      clothingOutfit = clothing;
-      accessories = 'Leafy green neck scarf.';
-      signatureItem = 'Emerald green neck scarf';
-      personality = 'Gentle, observant, encouraging, and friendly.';
-      personalityTraits = ['Gentle', 'Observant', 'Friendly'];
-      lockedAttributes = ['Golden coat with star spots', 'Emerald green neck scarf'];
-    } else if (lowerName === 'white pony') {
-      id = 'WHITE_PONY';
-      displayName = 'White Pony';
-      role = 'Gentle Steed Companion';
-      characterType = 'Animal (Pony)';
-      species = 'White Pony';
-      age = 'Young Pony';
-      ageCategory = 'Child';
-      gender = 'Unspecified';
-      appearance = `Graceful silky white pony with shimmering silver-blue braided mane, glittering golden hooves, and a pastel lavender saddle blanket in ${style}.`;
-      visualAppearance = `Silky white pony with silver-blue mane and lavender saddle in ${style}`;
-      clothing = 'Pastel lavender velvet saddle blanket with silver tassel trim.';
-      clothingOutfit = clothing;
-      accessories = 'Lavender saddle blanket and golden horseshoes.';
-      signatureItem = 'Lavender velvet saddle blanket';
-      personality = 'Graceful, swift, spirited, and gentle.';
-      personalityTraits = ['Graceful', 'Swift', 'Gentle'];
-      lockedAttributes = ['Silky white coat', 'Silver-blue braided mane', 'Lavender saddle'];
-    } else if (lowerName === 'friendly lion') {
-      id = 'FRIENDLY_LION';
-      displayName = 'Friendly Lion';
-      role = 'Noble Companion';
-      characterType = 'Animal (Lion)';
-      species = 'Lion';
-      age = 'Young Lion';
-      ageCategory = 'Child';
-      gender = 'Male';
-      appearance = `Noble yet friendly golden lion cub with a plush sunny-orange mane, warm amber eyes, and a tiny polished golden crown pin on his chest in ${style}.`;
-      visualAppearance = `Golden lion cub with orange mane and crown pin in ${style}`;
-      clothing = 'Polished golden crown lapel pin.';
-      clothingOutfit = clothing;
-      accessories = 'Golden crown badge.';
-      signatureItem = 'Golden crown badge';
-      personality = 'Brave, noble, cheerful, and protective.';
-      personalityTraits = ['Brave', 'Noble', 'Protective'];
-      lockedAttributes = ['Golden cub coat', 'Sunny orange mane', 'Golden crown badge'];
-    } else if (lowerName === 'playful monkey') {
-      id = 'PLAYFUL_MONKEY';
-      displayName = 'Playful Monkey';
-      role = 'Acrobatic Companion';
-      characterType = 'Animal (Monkey)';
-      species = 'Monkey';
-      age = 'Young Monkey';
-      ageCategory = 'Child';
-      gender = 'Male';
-      appearance = `Spirited chestnut-brown cartoon monkey with peach muzzle, curved expressive tail, wearing a tiny red aviator cap with brass goggles in ${style}.`;
-      visualAppearance = `Chestnut monkey with red aviator cap and goggles in ${style}`;
-      clothing = 'Red leather aviator cap with brass goggles pushed up on forehead.';
-      clothingOutfit = clothing;
-      accessories = 'Aviator cap and brass goggles.';
-      signatureItem = 'Red aviator cap with brass goggles';
-      personality = 'Acrobatic, cheeky, clever, and energetic.';
-      personalityTraits = ['Cheeky', 'Acrobatic', 'Clever'];
-      lockedAttributes = ['Chestnut brown coat', 'Red aviator cap', 'Brass goggles'];
-    } else if (lowerName === 'baby birds') {
-      id = 'BABY_BIRDS_GROUP';
-      displayName = 'Baby Birds Group';
-      role = 'Avian Chorus';
-      characterType = 'Avian Group';
-      species = 'Baby Songbirds';
-      age = 'Fledglings';
-      ageCategory = 'Child';
-      gender = 'Group';
-      appearance = `Charming trio of pastel songbird chicks (sky blue, lemon yellow, and cotton candy pink) with fluffy down feathers and tiny musical note badges in ${style}.`;
-      visualAppearance = `Trio of blue, yellow, and pink fluffy songbird chicks in ${style}`;
-      clothing = 'Tiny polished silver musical note chest badges.';
-      clothingOutfit = clothing;
-      accessories = 'Silver musical note badges.';
-      signatureItem = 'Silver musical note badges';
-      personality = 'Musical, joyful, harmonious, and uplifting.';
-      personalityTraits = ['Musical', 'Joyful', 'Harmonious'];
-      lockedAttributes = ['Trio pastel down feathers', 'Silver musical note badges'];
-    } else if (lowerName === 'friendly owl') {
-      id = 'FRIENDLY_OWL';
-      displayName = 'Friendly Owl';
-      role = 'Wise Twilight Guide';
-      characterType = 'Animal (Owl)';
-      species = 'Owl';
-      age = 'Wise Elder';
-      ageCategory = 'Elder';
-      gender = 'Unspecified';
-      appearance = `Gentle scholarly tawny owl with fluffy speckled feathers, oversized glowing amber eyes, wearing round horn-rimmed reading glasses and a tiny tweed vest in ${style}.`;
-      visualAppearance = `Speckled tawny owl with round glasses and tweed vest in ${style}`;
-      clothing = 'Miniature brown tweed vest with brass pocket-watch chain.';
-      clothingOutfit = clothing;
-      accessories = 'Horn-rimmed spectacles and brass pocket-watch.';
-      signatureItem = 'Horn-rimmed spectacles';
-      personality = 'Wise, patient, encouraging, and articulate.';
-      personalityTraits = ['Wise', 'Patient', 'Encouraging'];
-      lockedAttributes = ['Tawny speckled feathers', 'Horn-rimmed spectacles', 'Tweed vest'];
-    } else if (lowerName === 'cheerful penguin') {
-      id = 'CHEERFUL_PENGUIN';
-      displayName = 'Cheerful Penguin';
-      role = 'Snow Companion';
-      characterType = 'Animal (Penguin)';
-      species = 'Penguin';
-      age = 'Young Penguin';
-      ageCategory = 'Child';
-      gender = 'Unspecified';
-      appearance = `Chubby black-and-white cartoon penguin chick with bright orange flipper feet, rosy cheeks, wearing a cozy knitted turquoise beanie with a fluffy pom-pom in ${style}.`;
-      visualAppearance = `Penguin chick in turquoise pom-pom beanie in ${style}`;
-      clothing = 'Knitted turquoise beanie with white fluffy pom-pom.';
-      clothingOutfit = clothing;
-      accessories = 'Turquoise beanie and rainbow ice-skates.';
-      signatureItem = 'Turquoise pom-pom beanie';
-      personality = 'Bouncy, cheerful, clumsy, and enthusiastic.';
-      personalityTraits = ['Cheerful', 'Bouncy', 'Enthusiastic'];
-      lockedAttributes = ['Plump penguin silhouette', 'Turquoise pom-pom beanie', 'Rosy cheeks'];
-    } else if (lowerName === 'rainbow queen') {
-      id = 'RAINBOW_QUEEN';
-      displayName = 'Rainbow Queen';
-      role = 'Royal Guardian';
-      characterType = 'Royal / Magical';
-      species = 'Human / Royal';
       age = 'Adult';
-      ageCategory = 'Adult';
-      gender = 'Female';
-      appearance = `Majestic and warm Rainbow Queen wearing a shimmering iridescent prism gown with flowing crystalline cape, delicate golden starlight tiara, and compassionate smiling face in ${style}.`;
-      visualAppearance = `Rainbow Queen in iridescent prism gown and starlight tiara in ${style}`;
-      clothing = 'Iridescent prism gown with crystalline stardust train.';
-      clothingOutfit = clothing;
-      accessories = 'Golden starlight tiara and crystal prism scepter.';
-      signatureItem = 'Starlight tiara and prism scepter';
-      personality = 'Regal, benevolent, welcoming, and inspiring.';
-      personalityTraits = ['Regal', 'Benevolent', 'Inspiring'];
-      lockedAttributes = ['Iridescent prism gown', 'Golden starlight tiara', 'Prism scepter'];
-    } else if (lowerName === 'elena' || lowerName === 'elder sister') {
-      id = 'CHAR_001_ELENA';
-      displayName = 'Elena (Elder Sister & Lead Explorer)';
-      role = 'Lead Protagonist';
-      characterType = 'Human Explorer';
-      species = 'Human';
-      age = '12 years old';
-      ageCategory = 'Child';
-      gender = 'Female';
-      appearance = `Intelligent and protective 12yo sister Elena with wavy auburn hair in a neat half-up braid, warm green eyes, wearing an emerald green adventure tunic over brown leggings and leather trail boots in ${style}.`;
-      visualAppearance = `12yo Elena in emerald green tunic and trail boots in ${style}`;
-      face = 'Warm green eyes, gentle determined gaze, light freckles on bridge of nose.';
-      hair = 'Wavy auburn hair secured in a half-up adventurer braid.';
-      skin = 'Fair skin tone with sun-kissed cheeks.';
-      clothing = 'Emerald green adventure tunic, brown leggings, sturdy leather trail boots.';
-      clothingOutfit = clothing;
-      accessories = 'Vintage brass compass on leather cord and leather messenger satchel.';
-      signatureItem = 'Vintage brass compass';
-      personality = 'Protective, observant, intelligent, and courageous.';
-      personalityTraits = ['Protective', 'Intelligent', 'Courageous', 'Caring'];
-      voice = `Clear, thoughtful, and articulate in ${lang}.`;
-      lockedAttributes = ['Emerald green tunic', 'Auburn half-up braid', 'Vintage brass compass', 'Brown trail boots'];
-    } else if (lowerName === 'maya' || lowerName === 'younger sister') {
-      id = toStableId(`CHAR_${String(entityIndex).padStart(3, '0')}`, 'Maya');
-      displayName = 'Maya (Sister & Explorer)';
-      role = entityIndex === 1 ? 'Lead Protagonist' : 'Companion & Explorer';
-      characterType = 'Human Explorer';
-      species = 'Human';
-      age = '8 years old';
-      ageCategory = 'Child';
-      gender = 'Female';
-      appearance = `Playful, spirited 8yo sister Maya with twin high buns tied with yellow ribbons, bright amber eyes, wearing a sunny yellow knit cardigan over denim dungarees and teal canvas sneakers in ${style}.`;
-      visualAppearance = `8yo Maya in yellow cardigan, dungarees, and twin buns in ${style}`;
-      face = 'Big curious amber eyes, cheerful dimpled smile, animated expressions.';
-      hair = 'Dark brown hair styled into twin high buns tied with sunny yellow ribbons.';
-      skin = 'Warm radiant child skin tone.';
-      clothing = 'Sunny yellow knit cardigan over denim overalls, teal canvas sneakers.';
-      clothingOutfit = clothing;
-      accessories = 'Yellow hair ribbons and flower-covered sketchbook.';
-      signatureItem = 'Yellow hair ribbons & flower sketchbook';
-      personality = 'Playful, enthusiastic, creative, and fearless.';
-      personalityTraits = ['Playful', 'Creative', 'Fearless', 'Affectionate'];
-      voice = `High-spirited, energetic, and joyful in ${lang}.`;
-      lockedAttributes = ['Twin buns with yellow ribbons', 'Sunny yellow cardigan', 'Denim overalls', 'Teal sneakers'];
-    } else if (lowerName === 'tara') {
-      id = toStableId(`CHAR_${String(entityIndex).padStart(3, '0')}`, 'Tara');
-      displayName = 'Tara (Sister & Explorer)';
-      role = entityIndex === 1 ? 'Lead Protagonist' : 'Companion & Explorer';
-      characterType = 'Human Explorer';
-      species = 'Human';
-      age = '7 years old';
-      ageCategory = 'Child';
-      gender = 'Female';
-      appearance = `Curious, spirited 7yo sister Tara with dark braided pigtails with aqua clips, bright hazel eyes, wearing a turquoise marine exploration jacket over navy shorts and water shoes in ${style}.`;
-      visualAppearance = `7yo Tara in turquoise exploration jacket and braided pigtails in ${style}`;
-      face = 'Bright curious hazel eyes, cheerful dimpled smile, animated expressions.';
-      hair = 'Dark braided pigtails secured with aqua-blue clips.';
-      skin = 'Warm radiant child skin tone.';
-      clothing = 'Turquoise marine exploration jacket, navy shorts, aqua-blue water shoes.';
-      clothingOutfit = clothing;
-      accessories = 'Waterproof dive torch and shell charm necklace.';
-      signatureItem = 'Waterproof dive torch';
-      personality = 'Curious, quick-witted, brave, and cheerful.';
-      personalityTraits = ['Curious', 'Brave', 'Quick-witted', 'Cheerful'];
-      voice = `High-spirited, energetic, and joyful in ${lang}.`;
-      lockedAttributes = ['Braided pigtails with aqua clips', 'Turquoise marine jacket', 'Dive torch', 'Navy shorts'];
-    } else if (lowerName === 'liam') {
-      id = 'CHAR_001_LIAM';
-      displayName = 'Liam (Lead Explorer)';
-      role = 'Lead Protagonist';
-      characterType = 'Human Explorer';
-      species = 'Human';
-      age = '14 years old';
-      ageCategory = 'Teen';
-      gender = 'Male';
-      appearance = `Determined and resourceful 14yo explorer Liam with dark wavy hair, expressive grey-blue eyes, wearing a cobalt-blue tactical windbreaker over grey cargo trousers and hiking boots in ${style}.`;
-      visualAppearance = `14yo Liam in cobalt windbreaker and cargo trousers in ${style}`;
-      clothing = 'Cobalt-blue tactical windbreaker, charcoal cargo trousers, rugged trail shoes.';
-      clothingOutfit = clothing;
-      accessories = 'Tactical digital chronometer and carabiner gear clips.';
-      signatureItem = 'Tactical chronometer';
-      personality = 'Confident, analytical, courageous, and dependable.';
-      personalityTraits = ['Confident', 'Analytical', 'Courageous'];
-      voice = `Clear, confident teen enunciation in ${lang}.`;
-      lockedAttributes = ['Cobalt-blue windbreaker', 'Dark wavy hair', 'Tactical chronometer'];
-    } else if (lowerName === 'sophia') {
-      id = 'CHAR_002_SOPHIA';
-      displayName = 'Sophia (Tech Specialist)';
-      role = 'Lead Specialist';
-      characterType = 'Human Specialist';
-      species = 'Human';
-      age = '14 years old';
-      ageCategory = 'Teen';
-      gender = 'Female';
-      appearance = `Brilliant 14yo tech strategist Sophia with sleek auburn ponytail, hazel eyes behind thin rose-gold frames, wearing a coral-pink technical vest and dark leggings in ${style}.`;
-      visualAppearance = `14yo Sophia in coral vest and rose-gold glasses in ${style}`;
-      clothing = 'Coral-pink technical vest over long-sleeve grey shirt, dark trail leggings.';
-      clothingOutfit = clothing;
-      accessories = 'Rose-gold rimmed spectacles and handheld holographic data scanner.';
-      signatureItem = 'Holographic data scanner';
-      personality = 'Inventive, quick-thinking, curious, and empathetic.';
-      personalityTraits = ['Inventive', 'Quick-thinking', 'Empathetic'];
-      voice = `Bright, articulate, and insightful in ${lang}.`;
-      lockedAttributes = ['Coral-pink technical vest', 'Rose-gold spectacles', 'Auburn ponytail'];
-    } else if (lowerName === 'noah') {
-      id = 'CHAR_003_NOAH';
-      displayName = 'Noah (Field Specialist)';
-      role = 'Field Specialist';
-      characterType = 'Human Specialist';
-      species = 'Human';
-      age = '13 years old';
-      ageCategory = 'Teen';
-      gender = 'Male';
-      appearance = `Observant 13yo field scout Noah with curly dark-brown hair, warm hazel eyes, wearing an olive-drab utility jacket with orange accents, sturdy khaki shorts, and trail sneakers in ${style}.`;
-      visualAppearance = `13yo Noah in olive utility jacket and khaki shorts in ${style}`;
-      clothing = 'Olive-drab utility jacket with high-vis orange zipper pulls, khaki shorts.';
-      clothingOutfit = clothing;
-      accessories = 'Multi-spectrum exploration monocular on neck lanyard.';
-      signatureItem = 'Exploration monocular';
-      personality = 'Observant, cautious, loyal, and quick-witted.';
-      personalityTraits = ['Observant', 'Loyal', 'Quick-witted'];
-      voice = `Calm, measured, and observant in ${lang}.`;
-      lockedAttributes = ['Olive utility jacket with orange pulls', 'Curly dark hair', 'Exploration monocular'];
-    } else if (lowerName === 'emma') {
-      id = 'CHAR_004_EMMA';
-      displayName = 'Emma (Naturalist)';
-      role = 'Naturalist & Communications';
-      characterType = 'Human Specialist';
-      species = 'Human';
-      age = '13 years old';
-      ageCategory = 'Teen';
-      gender = 'Female';
-      appearance = `Spirited 13yo naturalist Emma with golden-blonde braid tied with a teal band, bright green eyes, wearing a teal fleece pullover, denim shorts over thermal tights, and trail boots in ${style}.`;
-      visualAppearance = `13yo Emma in teal fleece and golden braid in ${style}`;
-      clothing = 'Teal fleece pullover, denim shorts over dark thermal tights, brown trail boots.';
-      clothingOutfit = clothing;
-      accessories = 'Field specimen notebook and audio-recorder microphone.';
-      signatureItem = 'Field specimen notebook';
-      personality = 'Enthusiastic, compassionate, communicative, and observant.';
-      personalityTraits = ['Enthusiastic', 'Compassionate', 'Observant'];
-      voice = `Expressive, warm, and upbeat in ${lang}.`;
-      lockedAttributes = ['Teal fleece pullover', 'Golden-blonde braid', 'Field notebook'];
     }
 
-    const visualPromptAnchor = `${id}, ${displayName}, ${age}, ${characterType}, ${appearance}, ${style}, volumetric cinematic lighting, 8k render`;
-    const characterConsistencyLock = `${id}: ${name}, ${characterType} (${age}): ${clothing}. Locked facial structure & signature costume across all scenes. Exactly ONE character.`;
+    const isTalking = /\btalking\b|\bbol(ta|ti|te)\b/.test(ctxLower);
+    const role = entityIndex === 1 ? 'Lead / Protagonist' : isAnimalOrCreature ? 'Animal Companion' : 'Supporting Character';
+
+    const baseAppearanceHint = entity.speciesMatch?.appearanceHint || `${gender === 'Unspecified' ? 'expressive' : gender.toLowerCase()} human character`;
+    const furOrSkin = entity.speciesMatch?.furOrSkinHint || 'Natural radiant skin tone with warm cinematic lighting';
+
+    const appearance = isAnimalOrCreature
+      ? `${name}, a ${isTalking ? 'talking ' : ''}${baseAppearanceHint}, rendered in ${style} aesthetic with expressive character-forward eyes.`
+      : `${name}, a ${gender === 'Unspecified' ? '' : gender.toLowerCase() + ' '}character with warm expressive features, rendered in ${style} aesthetic.`;
+    const visualAppearance = `${name} — ${characterType} in ${style}`;
+
+    const face = isAnimalOrCreature
+      ? 'Expressive, intelligent eyes with warm, character-forward gaze.'
+      : 'Expressive eyes, warm facial symmetry, natural confident gaze.';
+    const hair = isAnimalOrCreature ? furOrSkin : 'Neatly styled hair framing face with realistic physics.';
+    const skin = isAnimalOrCreature ? furOrSkin : 'Natural radiant tone with volumetric lighting.';
+    const body = isAnimalOrCreature ? 'Proportioned to species with natural posture and gait.' : 'Well-proportioned silhouette suited for animation.';
+    const clothing = isAnimalOrCreature ? 'No clothing — natural coat/plumage/scales only, unless a signature accessory is noted.' : `Signature tailored outfit in ${style}.`;
+    const accessories = 'Signature accessory establishing visual continuity across scenes.';
+    const personality = 'Curious, warm, and emotionally expressive, with a distinct narrative role.';
+    const voice = isTalking || !isAnimalOrCreature
+      ? `Clear, characterful vocal delivery in ${lang}.`
+      : `Non-verbal — communicates through sound design and expressive body language.`;
+
+    const visualPromptAnchor = `${id}, ${name}, ${age}, ${characterType}, ${appearance}, ${style}, volumetric cinematic lighting, 8k render`;
+    const characterConsistencyLock = `${id}: ${name}, ${characterType} (${age}): ${clothing}. Locked facial/feature structure and signature look must remain identical in every scene this character appears in.`;
     const generationPrompt = `Master reference portrait of ${id} (${name}), ${appearance}, aesthetic style ${style}, clean studio lighting, 8k --ar 1:1`;
 
     const charProfile: CharacterProfile = {
       id,
       name,
-      displayName,
+      displayName: `${name} (${role})`,
       role,
       characterType,
       type: 'character',
@@ -1172,7 +758,7 @@ export function extractAllAssetsUniversal(
       ageCategory,
       ageOrSpecies: age,
       gender,
-      description: `${displayName} rendered in ${style} aesthetic.`,
+      description: `${name} rendered in ${style} aesthetic.`,
       appearance,
       visualAppearance,
       face,
@@ -1183,28 +769,32 @@ export function extractAllAssetsUniversal(
       bodyOrBuild: body,
       bodyProportions: 'Natural proportions matched to age and species',
       clothing,
-      clothingOutfit,
-      shoes: 'Signature footwear matching character design',
+      clothingOutfit: clothing,
+      shoes: isAnimalOrCreature ? 'N/A' : 'Signature footwear matching character design',
       accessories,
-      signatureItem,
+      signatureItem: accessories,
       personality,
-      personalityTraits,
-      expressions,
+      personalityTraits: ['Curious', 'Warm', 'Distinctive'],
+      expressions: 'Warm reassuring expressions, wide-eyed curiosity, animated reactions.',
       voice,
-      voiceStyle,
+      voiceStyle: voice,
       voiceCharacteristics: voice,
-      speakingStyle,
+      speakingStyle: isTalking || !isAnimalOrCreature ? 'Natural, characterful cadence.' : 'Communicates via sound and gesture, not speech.',
       speakingOrSingingRole: role,
-      characterPurpose,
+      characterPurpose: entityIndex === 1
+        ? 'Lead the narrative and anchor the audience point of view.'
+        : 'Support the narrative, deepen relationships, and create visual variety.',
       visualPromptAnchor,
       characterConsistencyLock,
       characterIdentityLock: characterConsistencyLock,
       generationPrompt,
-      lockedAttributes,
+      lockedAttributes: isAnimalOrCreature
+        ? ['Species-accurate silhouette', 'Coat/fur/scale coloring', 'Signature accessory']
+        : ['Signature Outfit', 'Facial Geometry', 'Hairstyle'],
       style,
       status: 'REFERENCE_READY',
       referenceImageStatus: 'READY',
-      usageScenes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+      usageScenes: [],
       negativePrompt: 'different face, altered clothing, distorted proportions, extra limbs, blurry, morphing face, inconsistent outfit, changing colors',
     };
 
@@ -1213,8 +803,24 @@ export function extractAllAssetsUniversal(
   }
 
   // -------------------------------------------------------------
-  // DEFAULT PROPS & ENVIRONMENTS (Narrative-Aware)
+  // DEFAULT PROPS & ENVIRONMENTS (Narrative-Aware, generic keyword driven)
   // -------------------------------------------------------------
+  const lowerStory = storyNarrative.toLowerCase();
+  const SETTING_LIBRARY: Array<{ pattern: RegExp; label: string; description: string; lighting: string; timeOfDay: string }> = [
+    { pattern: /jungle|forest|van\b/i, label: 'Ancient Jungle', description: 'Ancient dense jungle with towering trees, moss-covered rocks, a winding forest path, and soft morning mist.', lighting: 'Dappled sunlight filtering through the forest canopy', timeOfDay: 'Morning' },
+    { pattern: /ocean|sea|samundar|underwater|undersea/i, label: 'Undersea World', description: 'Vivid undersea world with coral reefs, drifting light rays, and gentle currents.', lighting: 'Soft blue-green caustic light rippling through water', timeOfDay: 'Midday' },
+    { pattern: /river|kinare|yamuna|ganga|stream/i, label: 'Riverside', description: 'Tranquil riverside with flowing water, smooth pebbles, and overhanging trees.', lighting: 'Warm golden-hour light reflecting off the water', timeOfDay: 'Golden Hour' },
+    { pattern: /city|shehar|town|street/i, label: 'City Streets', description: 'Bustling city streets with tall buildings, warm shopfront lights, and gentle background activity.', lighting: 'Warm ambient city lighting with soft shadows', timeOfDay: 'Evening' },
+    { pattern: /space|galaxy|planet|star(s)?\b/i, label: 'Outer Space', description: 'Vast starlit expanse with distant nebulae and a softly glowing planet in the background.', lighting: 'Cool starlight with subtle nebula color washes', timeOfDay: 'Timeless' },
+    { pattern: /desert|registan/i, label: 'Desert Dunes', description: 'Sweeping golden desert dunes with rippling sand patterns and a wide open sky.', lighting: 'Warm harsh sunlight with long dramatic shadows', timeOfDay: 'Afternoon' },
+    { pattern: /mountain|pahad/i, label: 'Mountain Range', description: 'Dramatic mountain range with rocky outcrops, thin mist, and a winding trail.', lighting: 'Crisp cool light with distant haze', timeOfDay: 'Morning' },
+    { pattern: /palace|kingdom|rajmahal|mahal/i, label: 'Royal Palace', description: 'Ornate royal palace interior with tall pillars, rich fabrics, and warm lantern light.', lighting: 'Warm golden lantern and candle light', timeOfDay: 'Evening' },
+    { pattern: /cave|gufa/i, label: 'Hidden Cave', description: 'Atmospheric hidden cave with glowing crystal formations and echoing chambers.', lighting: 'Soft bioluminescent glow from crystal formations', timeOfDay: 'N/A (Interior)' },
+    { pattern: /village|gaon/i, label: 'Countryside Village', description: 'Warm countryside village with thatched roofs, open courtyards, and simple lanes.', lighting: 'Soft natural daylight with warm undertones', timeOfDay: 'Daytime' },
+  ];
+
+  const primarySetting = SETTING_LIBRARY.find((s) => s.pattern.test(lowerStory));
+
   props.push({
     id: toStableId('PROP', 'STORY_KEY_ARTIFACT'),
     displayName: 'Key Narrative Artifact',
@@ -1231,22 +837,22 @@ export function extractAllAssetsUniversal(
 
   environments.push(
     {
-      id: toStableId('ENV', 'PRIMARY_SETTING'),
-      displayName: 'Primary Narrative Setting',
+      id: toStableId('ENV', primarySetting ? primarySetting.label : 'PRIMARY_SETTING'),
+      displayName: primarySetting ? primarySetting.label : 'Primary Narrative Setting',
       type: 'environment',
-      description: `Grand establishing environment for the narrative in ${style}.`,
-      appearance: `Expansive cinematic world with rich atmospheric depth, volumetric lighting, and iconic visual landmarks in ${style}.`,
-      lighting: 'Cinematic golden hour lighting with volumetric god rays',
-      timeOfDay: 'Golden Hour',
+      description: primarySetting ? primarySetting.description : `Grand establishing environment for the narrative in ${style}.`,
+      appearance: primarySetting ? `${primarySetting.description} Rendered in ${style} aesthetic.` : `Expansive cinematic world with rich atmospheric depth, volumetric lighting, and iconic visual landmarks in ${style}.`,
+      lighting: primarySetting ? primarySetting.lighting : 'Cinematic golden hour lighting with volumetric god rays',
+      timeOfDay: primarySetting ? primarySetting.timeOfDay : 'Golden Hour',
       style,
-      lockedAttributes: ['Signature architectural silhouette', 'Volumetric atmosphere'],
-      generationPrompt: `Environment master concept for primary setting, ${style}, 8k --ar 16:9`,
+      lockedAttributes: ['Signature environmental silhouette', 'Consistent time-of-day lighting'],
+      generationPrompt: `Environment master concept for ${primarySetting ? primarySetting.label : 'primary setting'}, ${style}, 8k --ar 16:9`,
       usageScenes: [1, 2, 3, 4, 5],
       status: 'REFERENCE_READY',
       referenceImageStatus: 'READY',
     },
     {
-      id: toStableId('ENV', 'INNER_SANCTUM'),
+      id: toStableId('ENV', 'FOCAL_INTERIOR'),
       displayName: 'Focal Interior / Sanctum',
       type: 'environment',
       description: `Focal location where core story revelations occur in ${style}.`,
@@ -1538,28 +1144,25 @@ export function generateScenesUniversal(
     const envId = envObj?.id || 'PRIMARY_ENVIRONMENT';
     const envDisplayName = envObj?.displayName || envObj?.description || envId;
 
-    // Determine Characters for this scene strictly from registered list
+    // Determine Characters for this scene strictly from registered list.
+    // All registered characters are treated as first-class citizens (not just a single
+    // "lead" plus rotating extras): the first few characters that appear together in the
+    // story are present from Scene 1, and any characters introduced later in the story
+    // are progressively brought in — then, once introduced, a character continues to be
+    // referenced by the SAME stable ID in every following scene (single source of truth).
     let sceneCharIds: string[] = [];
     if (registeredChars.length > 0) {
-      // Main hero is always present in key scenes
-      const leadChar = registeredChars[0];
-      if (leadChar) sceneCharIds.push(leadChar.id);
-
-      // Rotate secondary characters based on scene
-      if (registeredChars.length > 1) {
-        const secondaryIdx = 1 + (i % (registeredChars.length - 1));
-        const secChar = registeredChars[secondaryIdx];
-        if (secChar && !sceneCharIds.includes(secChar.id)) {
-          sceneCharIds.push(secChar.id);
-        }
-      }
-      // Add third character for climactic scenes
-      if ((i === Math.floor(actualCount / 2) || isLast) && registeredChars.length > 2) {
-        const thirdChar = registeredChars[2];
-        if (thirdChar && !sceneCharIds.includes(thirdChar.id)) {
-          sceneCharIds.push(thirdChar.id);
-        }
-      }
+      const initialGroupSize = Math.min(3, registeredChars.length);
+      const remainingCount = registeredChars.length - initialGroupSize;
+      const introduceAtScene = (charIdx: number): number => {
+        if (charIdx < initialGroupSize) return 0;
+        if (remainingCount <= 0 || actualCount <= 1) return 0;
+        const remainingIdx = charIdx - initialGroupSize;
+        return Math.min(actualCount - 1, 1 + Math.floor((remainingIdx * (actualCount - 1)) / remainingCount));
+      };
+      sceneCharIds = registeredChars
+        .filter((_, charIdx) => introduceAtScene(charIdx) <= i)
+        .map((c) => c.id);
     }
 
     // Determine Props for this scene strictly from registered list
@@ -1625,15 +1228,38 @@ export function generateScenesUniversal(
       props: scenePropIds,
     };
 
-    // Lyric lines (up to 3 lines per scene)
-    const lyricLines: string[] = [
-      `♪ Line ${sceneNum}A: Journey through the wonder of ${envDisplayName} ♪`,
-      `♪ Line ${sceneNum}B: With joyful steps and friends so true ♪`,
-      `♪ Line ${sceneNum}C: Singing together all the way through ♪`,
-    ];
+    // No voice mode in this project supports song/lyrics generation, so narrative text is
+    // NEVER converted into lyrics. lyricLines stays empty unless a future song feature adds
+    // real generated lines explicitly (kept as a field for backward compatibility only).
+    const lyricLines: string[] = [];
 
     const sTitle = `Scene ${sceneNum}: ${envDisplayName}`;
-    const dialogue = ctx.isNoSpoken ? 'NONE' : `Speaker: ${sceneCharIds[0] || 'Lead'}\nDialogue: "${lyricLines[0]}"`;
+
+    // Build mode-aware dialogue with an explicit, existing character ID as speaker for every
+    // spoken line. Narration and character dialogue are never merged into one generic line,
+    // and the same line is never assigned to every character.
+    let dialogue = 'NONE (No Spoken Dialogue — background score and Foley only)';
+    if (!ctx.isNoSpoken) {
+      const sceneCharsForDialogue = sceneCharIds
+        .map((cid) => registeredChars.find((c) => c.id === cid))
+        .filter((c): c is CharacterProfile => Boolean(c));
+
+      if (ctx.isNarratorOnly || sceneCharsForDialogue.length === 0) {
+        dialogue = `Speaker: Narrator\nLine: "${actionDesc}"`;
+      } else if (ctx.isCharOnly) {
+        dialogue = sceneCharsForDialogue
+          .map((c) => `Speaker: ${c.name} [${c.id}]\nLine: "${c.name}, reacting to ${envDisplayName}, speaks in character about the current story beat."`)
+          .join('\n');
+      } else {
+        // Narrator + Character Dialogue: a narration line, plus one distinct line per
+        // character actually present in the scene, each with its own explicit speaker.
+        const narratorLine = `Speaker: Narrator\nLine: "${actionDesc}"`;
+        const charLines = sceneCharsForDialogue
+          .map((c) => `Speaker: ${c.name} [${c.id}]\nLine: "${c.name} responds in character to the unfolding scene."`)
+          .join('\n');
+        dialogue = charLines ? `${narratorLine}\n${charLines}` : narratorLine;
+      }
+    }
 
     const sceneCharDescriptions = sceneCharIds.map((cid) => {
       const found = registeredChars.find((c) => c.id === cid || c.name === cid || c.displayName === cid);
@@ -1641,7 +1267,7 @@ export function generateScenesUniversal(
     }).join('; ');
 
     const charPromptPart = sceneCharIds.length > 0
-      ? `Characters (Strictly ONE of each with locked identity): ${sceneCharDescriptions}.`
+      ? `Characters present (each with a locked, independent identity — exactly one instance of each listed character, no duplicates): ${sceneCharDescriptions}.`
       : 'Characters: NONE.';
 
     const characterLockedPrompt = sceneCharIds.map((cid) => {
@@ -1781,13 +1407,16 @@ export function generateVideoPromptsUniversal(
 
     // Registered characters in this scene
     const charIds = scene.assetDependencies?.characters || scene.characters || [];
-    const charConstraints = charIds
-      .map((id) => {
-        const found = charMap[id];
-        const lock = found?.characterConsistencyLock || found?.appearance || found?.visualAppearance || id;
-        return `Exactly ONE: ${id} (${lock})`;
-      })
-      .join('\n');
+    const charConstraints = charIds.length > 0
+      ? charIds
+          .map((id) => {
+            const found = charMap[id];
+            const lock = found?.characterConsistencyLock || found?.appearance || found?.visualAppearance || id;
+            const displayName = found?.name ? `${found.name} [${id}]` : id;
+            return `- ${displayName}: ${lock} (exactly one instance of this character — do not duplicate or merge with another character)`;
+          })
+          .join('\n')
+      : 'NONE (no characters in this shot)';
 
     // Registered Environment
     const envId = scene.assetDependencies?.environment || scene.environment || scene.location;
