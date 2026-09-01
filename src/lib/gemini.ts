@@ -457,7 +457,7 @@ export async function generateCharactersAI(
   ).trim();
 
   const prompt = `You are an elite Character Designer, Concept Artist, and Visual Continuity Director for AI video production (Midjourney, Runway Gen-3, OpenAI Sora, Kling AI).
-Your task is to analyze the ACTIVE STORY narrative below and extract every distinct individual character required by the story.
+Your task is to analyze the ACTIVE STORY narrative below and extract EVERY distinct individual character that actually participates in it — never just the first or most prominent one.
 
 ACTIVE STORY CONTENT:
 """
@@ -475,27 +475,32 @@ PROJECT METADATA (REFERENCE ONLY - NEVER EXTRACT CHARACTERS MERELY FROM TITLE/ME
 CRITICAL EXTRACTION RULES:
 1. STORY-FIRST EXTRACTION: Extract characters ONLY from what is described or taking part in the ACTIVE STORY CONTENT above.
 2. NEVER EXTRACT MERELY FROM TITLE: NEVER create a character merely because a word or name appears in the project title, idea, or metadata if that character does not exist in the active story text.
-3. EVERY DISTINCT CHARACTER MUST BE AN INDIVIDUAL PROFILE:
-   - If the story contains Radha, Krishna, and Balram, create THREE separate character profiles: "Radha", "Krishna", "Balram".
-   - If the story contains "Chiku enters the meadow with his two friends, a cute Bunny and a playful Baby Bear", create THREE separate character profiles: "Chiku", "Bunny", "Baby Bear".
-   - If the story contains 2 sisters "Elena and Maya", create TWO separate profiles: "Elena" and "Maya".
-4. NEVER COMBINE CHARACTERS: "two friends", "the companions", "some animals", "group of kids", "characters", "people" are NEVER character names or IDs. Every character must be an individual entity.
-5. NO NAMED CHARACTERS IN STORY: If the active story is purely ambient or environmental with NO explicit characters, return an empty JSON array []. Do NOT invent characters from the project title.
-6. COMPLETE LOCKED IDENTITY BLUEPRINT: Every extracted character profile must contain complete, rich attributes for 100% visual and voice consistency across all video generation models.
+3. NEVER STOP AFTER THE FIRST CHARACTER: Re-read the full story before finalizing your answer and count every distinct named or clearly-implied individual (human, animal, robot, spirit, or any other entity) who takes part — a story with 2 characters must return 2 profiles, a story with 4 must return 4, a story with 10+ must return 10+. Do not assume a story has only one character.
+4. EVERY DISTINCT CHARACTER MUST BE AN INDIVIDUAL PROFILE, with its own name and stable ID — e.g. a story naming three siblings produces three separate profiles, one each; a story with a child and two named animal companions produces three separate profiles, one each.
+5. NEVER COMBINE CHARACTERS: "two friends", "the companions", "some animals", "group of kids", "characters", "people" are NEVER character names or IDs. Every character must be an individual entity.
+6. NO NAMED CHARACTERS IN STORY: If the active story is purely ambient or environmental with NO explicit characters, return an empty JSON array []. Do NOT invent characters from the project title.
+7. A PROFILE CONTAINS ONLY THAT CHARACTER'S INFORMATION: Never place the story text, a scene description, or information about a different character inside a character's own fields (e.g. "appearance", "visualPromptAnchor"). Each field must describe only that one character.
+8. STABLE, SEQUENTIAL IDS: Assign IDs in order of first appearance as CHAR_001, CHAR_002, CHAR_003, etc. (you may append a short readable suffix, e.g. CHAR_001_NAME). The same character must always resolve to the same ID — never invent a new ID for a character that already exists in the story just because it reappears later.
+9. NO SINGLE-PROTAGONIST BIAS: Do not write "Exactly ONE character", "exactly one protagonist", or similar exclusivity language into any field — a scene may contain multiple characters simultaneously, each independently locked.
+10. DYNAMIC TYPE: characterType/species must be inferred from what the story actually says the character is (human boy, human girl, talking fox, robot, alien, fantasy creature, etc.) — never defaulted to "human" when the story indicates otherwise.
+
+WORKED EXAMPLE (illustrates the pattern only — do not reuse these names):
+Story: "Kavya and her friend Dev walk with their dog Bruno to an old lighthouse. There they meet a small robot named Pixel."
+Correct output: FOUR profiles — Kavya (CHAR_001), Dev (CHAR_002), Bruno (CHAR_003, a dog), Pixel (CHAR_004, a robot). Each profile contains ONLY that character's own attributes.
 
 Generate a JSON array of character objects matching this exact structure:
 [
   {
-    "id": "STABLE_UPPERCASE_ID (e.g. RADHA, KRISHNA, BALRAM, MAIN_CHILD_HERO, BUNNY_FRIEND, BABY_BEAR_FRIEND)",
-    "name": "Character Name (e.g. Chiku, Radha, Krishna, Bunny, Baby Bear)",
+    "id": "Stable sequential uppercase ID, e.g. CHAR_001_NAME (see rule 8)",
+    "name": "The character's own name exactly as used in the story",
     "displayName": "Display Name with Role (e.g. Chiku (Lead Protagonist))",
-    "role": "Role (e.g. Lead Protagonist / Animal Companion / Guide)",
-    "characterType": "Human Child / Rabbit / Deity / Young Adult / etc.",
-    "species": "Human / Rabbit / Bear Cub / Asian Elephant / etc.",
+    "role": "Role (e.g. Lead Protagonist / Animal Companion / Guide) — never assume every non-first character is merely a 'Companion'",
+    "characterType": "Concrete dynamic type inferred from the story, e.g. Human Boy / Human Girl / Talking Fox / Robot / Alien / Fantasy Creature",
+    "species": "Human / Fox / Robot / etc., inferred from the story",
     "age": "Age or Age Range (e.g. 7 years old)",
     "ageCategory": "Child / Young Adult / Adult / Elder",
     "gender": "Boy / Girl / Male / Female / Unspecified",
-    "appearance": "Comprehensive visual description combining face, eyes, hair, build, skin, and presence in ${settings.visualStyle}",
+    "appearance": "Comprehensive visual description of THIS character ONLY — face, eyes, hair, build, skin, presence in ${settings.visualStyle}. Never include story narrative or other characters here.",
     "visualAppearance": "Short visual appearance summary in ${settings.visualStyle}",
     "face": "Detailed facial features: eye shape/color, nose, mouth, cheeks, expressions",
     "hair": "Exact hairstyle, texture, cut, and color (or fur texture/groom)",
@@ -512,12 +517,14 @@ Generate a JSON array of character objects matching this exact structure:
     "voiceStyle": "Voice delivery style in ${settings.language}",
     "speakingStyle": "Pacing and speech patterns in ${settings.language}",
     "characterPurpose": "Strategic narrative purpose in the story",
-    "visualPromptAnchor": "Master diffusion prompt anchor locking exact features for AI video generation: [ID], [Name], [Age/Species], [Outfit], [Facial Features], ${settings.visualStyle}, volumetric lighting, 8k render",
-    "characterIdentityLock": "Strict identity lock: [ID]: [Name], [Key Visuals], [Signature Clothing]. Exactly ONE character. NEVER change facial structure or costume.",
+    "visualPromptAnchor": "Master diffusion prompt anchor locking exact features for AI video generation: [ID], [Name], [Age/Species], [Outfit], [Facial Features], ${settings.visualStyle}, volumetric lighting, 8k render — describing ONLY this character",
+    "characterIdentityLock": "Strict identity lock describing ONLY this character: [ID]: [Name], [Key Visuals], [Signature Clothing]. Never change facial structure or costume across scenes. Do NOT include exclusivity language like 'Exactly ONE character' — other characters may share the scene.",
     "generationPrompt": "Master character reference portrait prompt for Midjourney / SDXL in ${settings.visualStyle}, 8k",
     "lockedAttributes": ["Signature Outfit", "Hairstyle/Fur", "Key Accessory"]
   }
 ]
+
+Before responding, re-count the distinct characters you found against the story text one more time to make sure none were dropped.
 
 Respond ONLY with valid JSON (array of objects).`;
 
@@ -951,8 +958,12 @@ Generate a complete, production-ready AI Video Prompt specification for EVERY sc
 CRITICAL CONTINUITY & CONSISTENCY RULES:
 1. LOCKED CHARACTER CONSISTENCY: For any character that appears in a scene, the visual description MUST STRICTLY match the Locked Character Consistency Profile. NEVER invent different clothing, hairstyle, facial features, proportions, age, or colors.
 2. FAITHFUL SCENE BREAKDOWN: Follow the exact locations, blocking, dialogue, and actions defined in the Scene Breakdown. Do NOT invent unrelated events.
-3. AUDIO & DIALOGUE ENFORCEMENT: Voice Mode is "${voiceMode}". ${isNoSpokenWords ? 'STRICT DIRECTIVE: NO SPOKEN WORDS. NO NARRATION. Audio cues must indicate background music and Foley only. Set dialogue to "NONE".' : `Include the exact spoken dialogue/voiceover in ${settings.language}.`}
-4. DEDICATED MODEL FORMATS: Provide customized, optimized video prompt strings for:
+3. AUDIO & DIALOGUE ENFORCEMENT: Voice Mode is "${voiceMode}". ${isNoSpokenWords ? 'STRICT DIRECTIVE: NO SPOKEN WORDS. NO NARRATION. Audio cues must indicate background music and Foley only. Set dialogue to "NONE".' : `Include the exact spoken dialogue/voiceover in ${settings.language}, and prefix every line with its speaker (e.g. "Narrator:" or the character's own name). Never assign the same line to more than one character, and never invent a speaker that is not one of the LOCKED CHARACTER PROFILES below or "Narrator".`}
+3b. NO SONG LYRICS UNLESS EXPLICITLY REQUESTED: Do not convert narration or story text into song lyrics. Only write lyrics if the scene breakdown or voice mode explicitly calls for a song; otherwise "dialogue" must be narration and/or character speech only.
+4. MULTI-CHARACTER SCENES ARE NORMAL: A scene may contain any number of the LOCKED CHARACTER PROFILES simultaneously. NEVER write phrases like "Exactly ONE protagonist", "Exactly ONE character", or otherwise imply a scene is restricted to a single character — list and describe every character that the Scene Breakdown says is present in that scene, each with its own locked profile.
+5. USE REAL NAMES, NOT PLACEHOLDERS: When a real character profile exists for a role, refer to that character by its actual name and ID. Never fall back to generic placeholders like "Lead Explorer" or "Lead Protagonist" once a real name is available.
+6. ENVIRONMENT IS VISUAL ONLY: The "environment" field must describe only the physical setting (terrain, architecture, lighting, weather, mood) — it must NEVER be the raw story sentence, a slug of the story text, or any narrative summary.
+7. DEDICATED MODEL FORMATS: Provide customized, optimized video prompt strings for:
    - Google Veo: High cinematic realism, detailed motion descriptors, aspect ratio flag, lighting mood, audio sync note.
    - Runway Gen-3: Structured with camera dynamics [e.g. "Low angle dolly forward into..."], subject motion, cinematic 8k render keywords.
    - Kling AI: High dynamic range, master shot composition, continuous physical motion, rich color rendering.
@@ -983,8 +994,8 @@ Generate a JSON object with a "videoPrompts" array containing an entry for EVERY
       "durationSeconds": 10,
       "aspectRatio": "${settings.aspectRatio || '16:9'}",
       "visualStyle": "${settings.visualStyle}",
-      "characterConsistencyDescription": "Exact character visual attributes from locked profile (face, hair, signature clothes, props)",
-      "environment": "Detailed physical environment, architecture, set dressing, and weather",
+      "characterConsistencyDescription": "Exact visual attributes for every character listed as present in this scene (face, hair, signature clothes, props), each attributed to its own name/ID — never merge multiple characters into one description",
+      "environment": "Detailed physical environment ONLY (architecture, terrain, weather, set dressing) — never the raw story sentence or a slug of it",
       "action": "Core character actions, interactions, and movements in the scene",
       "facialExpressions": "Subtle and overt facial cues, gaze direction, emotional micro-expressions",
       "bodyMovement": "Body posture, kinetics, pacing, gestures, and gait",
@@ -1885,5 +1896,3 @@ Respond ONLY with valid JSON.`;
     audioSoundtrack: s.audioSoundtrack || 'Dramatic upbeat background music',
   };
 }
-
-
