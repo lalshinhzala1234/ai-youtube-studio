@@ -32,8 +32,131 @@ import {
 } from '@/types/project';
 
 // -------------------------------------------------------------
-// DURATION & TIME UTILITIES
+// SHARED STORY-AWARE LIBRARIES & HELPERS
+// (module scope so both asset extraction and scene planning use the SAME
+// story-derived data — never rediscovered independently downstream)
 // -------------------------------------------------------------
+
+export const SETTING_LIBRARY: Array<{ pattern: RegExp; label: string; description: string; lighting: string; timeOfDay: string }> = [
+  { pattern: /jungle|forest|van\b/i, label: 'Ancient Jungle', description: 'Ancient dense jungle with towering trees, moss-covered rocks, a winding forest path, and soft morning mist.', lighting: 'Dappled sunlight filtering through the forest canopy', timeOfDay: 'Morning' },
+  { pattern: /ocean|sea|samundar|underwater|undersea/i, label: 'Undersea World', description: 'Vivid undersea world with coral reefs, drifting light rays, and gentle currents.', lighting: 'Soft blue-green caustic light rippling through water', timeOfDay: 'Midday' },
+  { pattern: /river|kinare|yamuna|ganga|stream/i, label: 'Riverside', description: 'Tranquil riverside with flowing water, smooth pebbles, and overhanging trees.', lighting: 'Warm golden-hour light reflecting off the water', timeOfDay: 'Golden Hour' },
+  { pattern: /city|shehar|town|street/i, label: 'City Streets', description: 'Bustling city streets with tall buildings, warm shopfront lights, and gentle background activity.', lighting: 'Warm ambient city lighting with soft shadows', timeOfDay: 'Evening' },
+  { pattern: /space|galaxy|planet|star(s)?\b/i, label: 'Outer Space', description: 'Vast starlit expanse with distant nebulae and a softly glowing planet in the background.', lighting: 'Cool starlight with subtle nebula color washes', timeOfDay: 'Timeless' },
+  { pattern: /desert|registan/i, label: 'Desert Dunes', description: 'Sweeping golden desert dunes with rippling sand patterns and a wide open sky.', lighting: 'Warm harsh sunlight with long dramatic shadows', timeOfDay: 'Afternoon' },
+  { pattern: /mountain|pahad/i, label: 'Mountain Range', description: 'Dramatic mountain range with rocky outcrops, thin mist, and a winding trail.', lighting: 'Crisp cool light with distant haze', timeOfDay: 'Morning' },
+  { pattern: /palace|kingdom|rajmahal|mahal/i, label: 'Royal Palace', description: 'Ornate royal palace interior with tall pillars, rich fabrics, and warm lantern light.', lighting: 'Warm golden lantern and candle light', timeOfDay: 'Evening' },
+  { pattern: /cave|gufa/i, label: 'Hidden Cave', description: 'Atmospheric hidden cave with glowing crystal formations and echoing chambers.', lighting: 'Soft bioluminescent glow from crystal formations', timeOfDay: 'N/A (Interior)' },
+  { pattern: /village|gaon/i, label: 'Countryside Village', description: 'Warm countryside village with thatched roofs, open courtyards, and simple lanes.', lighting: 'Soft natural daylight with warm undertones', timeOfDay: 'Daytime' },
+  { pattern: /house|ghar|room|interior/i, label: 'House Interior', description: 'Lived-in interior with furnished rooms, warm household lighting, and personal details.', lighting: 'Soft warm indoor lighting with window daylight fill', timeOfDay: 'Daytime' },
+  { pattern: /office|building|corridor/i, label: 'Office / Building Interior', description: 'Modern office or building interior with clean lines and functional lighting.', lighting: 'Even cool-white overhead lighting', timeOfDay: 'Daytime' },
+  { pattern: /station|crime scene|murder|investigat/i, label: 'Investigation Scene', description: 'Muted, tense location consistent with an investigation — police tape, evidence markers, dim overhead light.', lighting: 'Low-key dramatic lighting with hard shadows', timeOfDay: 'Night' },
+];
+
+export const PROP_LIBRARY: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /golden key|silver key|ancient key|magic key|\bkey\b/i, label: 'Key' },
+  { pattern: /old map|ancient map|treasure map|\bmap\b/i, label: 'Map' },
+  { pattern: /lantern/i, label: 'Lantern' },
+  { pattern: /sword/i, label: 'Sword' },
+  { pattern: /amulet/i, label: 'Amulet' },
+  { pattern: /crystal/i, label: 'Crystal' },
+  { pattern: /\bbook\b|storybook|diary|journal/i, label: 'Book' },
+  { pattern: /\bletter\b/i, label: 'Letter' },
+  { pattern: /torch/i, label: 'Torch' },
+  { pattern: /compass/i, label: 'Compass' },
+  { pattern: /necklace/i, label: 'Necklace' },
+  { pattern: /\bring\b/i, label: 'Ring' },
+  { pattern: /\bstone\b|gemstone/i, label: 'Stone' },
+  { pattern: /scroll/i, label: 'Scroll' },
+  { pattern: /mirror/i, label: 'Mirror' },
+  { pattern: /feather/i, label: 'Feather' },
+  { pattern: /\begg\b/i, label: 'Egg' },
+  { pattern: /\bseed\b/i, label: 'Seed' },
+  { pattern: /\bcoin\b/i, label: 'Coin' },
+  { pattern: /flute/i, label: 'Flute' },
+  { pattern: /\bstaff\b/i, label: 'Staff' },
+  { pattern: /\bwand\b/i, label: 'Wand' },
+  { pattern: /shield/i, label: 'Shield' },
+  { pattern: /\bbow\b|\barrow\b/i, label: 'Bow & Arrow' },
+  { pattern: /\bboat\b/i, label: 'Boat' },
+  { pattern: /gun|pistol|weapon/i, label: 'Weapon' },
+  { pattern: /evidence|clue/i, label: 'Evidence' },
+  { pattern: /camera/i, label: 'Camera' },
+  { pattern: /phone|mobile/i, label: 'Phone' },
+];
+
+/**
+ * Splits raw story text into narrative "beats" (roughly one beat per sentence,
+ * across English, Hinglish, and Devanagari punctuation). Used so scene planning,
+ * character presence, environment, and props can all be derived from the SAME
+ * real slice of story text instead of being guessed independently.
+ */
+export function splitStoryIntoBeats(storyText: string): string[] {
+  if (!storyText || !storyText.trim()) return [];
+  const raw = storyText
+    .split(/(?<=[.!?।])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return raw.length > 0 ? raw : [storyText.trim()];
+}
+
+/** Maps `actualCount` scenes onto `beats.length` story beats, proportionally. */
+export function mapScenesToBeats(sceneCount: number, beats: string[]): string[][] {
+  if (beats.length === 0 || sceneCount <= 0) return Array.from({ length: Math.max(sceneCount, 0) }, () => []);
+  const groups: string[][] = Array.from({ length: sceneCount }, () => []);
+  beats.forEach((beat, beatIdx) => {
+    const sceneIdx = Math.min(sceneCount - 1, Math.floor((beatIdx * sceneCount) / beats.length));
+    groups[sceneIdx].push(beat);
+  });
+  // If a scene ended up with no beats (more scenes than beats), reuse the nearest
+  // preceding beat so every scene stays traceable to real story text rather than empty.
+  for (let i = 0; i < groups.length; i++) {
+    if (groups[i].length === 0) {
+      const prevWithContent = [...groups.slice(0, i)].reverse().find((g) => g.length > 0);
+      groups[i] = prevWithContent ? [prevWithContent[prevWithContent.length - 1]] : beats.length > 0 ? [beats[beats.length - 1]] : [];
+    }
+  }
+  return groups;
+}
+
+/** Finds the beat index (0-based) where a character's name is first mentioned as a whole word. */
+export function findCharacterFirstBeat(name: string, beats: string[]): number {
+  if (!name) return 0;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`\\b${escaped}\\b`, 'i');
+  for (let i = 0; i < beats.length; i++) {
+    if (pattern.test(beats[i])) return i;
+  }
+  return -1; // not found by literal name anywhere in the beats
+}
+
+/** Extracts quoted dialogue lines from a beat, with the nearest preceding character name as speaker. */
+export function extractQuotedDialogue(
+  beatText: string,
+  candidateCharacters: CharacterProfile[]
+): Array<{ speakerName: string; speakerId: string; line: string }> {
+  const results: Array<{ speakerName: string; speakerId: string; line: string }> = [];
+  const quoteMatches = Array.from(beatText.matchAll(/["“]([^"”]{2,300})["”]/g));
+  for (const match of quoteMatches) {
+    if (match.index === undefined) continue;
+    const before = beatText.slice(0, match.index);
+    let bestSpeaker: CharacterProfile | undefined;
+    let bestPos = -1;
+    for (const c of candidateCharacters) {
+      const idx = before.toLowerCase().lastIndexOf(c.name.toLowerCase());
+      if (idx > bestPos) {
+        bestPos = idx;
+        bestSpeaker = c;
+      }
+    }
+    if (bestSpeaker) {
+      results.push({ speakerName: bestSpeaker.name, speakerId: bestSpeaker.id, line: match[1].trim() });
+    }
+  }
+  return results;
+}
+
+
 
 export function parseDurationSeconds(durationStr?: string): number {
   if (!durationStr) return 180;
@@ -85,12 +208,15 @@ export function calculateSceneDurationsUniversal(
   totalSec: number,
   sceneCount: number,
   planningMode: PlanningMode = 'ai_auto',
-  baseSceneSec?: number
+  baseSceneSec?: number,
+  contentWeights?: number[]
 ): number[] {
   const count = Math.max(1, sceneCount);
   if (count === 1) return [totalSec];
 
   if (planningMode === 'manual' && baseSceneSec && baseSceneSec > 0) {
+    // MANUAL PLANNING: the user's exact scene count / per-scene duration is authoritative.
+    // AI auto-planning must never override these values.
     const durations = Array(count).fill(baseSceneSec);
     const sum = durations.reduce((a, b) => a + b, 0);
     const diff = totalSec - sum;
@@ -100,7 +226,10 @@ export function calculateSceneDurationsUniversal(
     return durations;
   }
 
-  // AI Auto Planning — Dynamic cinematic pacing curve
+  // AI Auto Planning — Dynamic cinematic pacing curve, blended with actual per-scene
+  // content weight (dialogue/narration word count) when available, so a
+  // dialogue-heavy or action-heavy beat gets more time than a brief transitional one
+  // instead of dividing the total duration equally or by position alone.
   const baseWeights = [0.8, 1.0, 1.05, 1.1, 1.3, 1.25, 0.9, 0.8];
   const weights: number[] = [];
   for (let i = 0; i < count; i++) {
@@ -115,6 +244,16 @@ export function calculateSceneDurationsUniversal(
     } else {
       const normalizedIdx = Math.floor((i / count) * baseWeights.length);
       weights.push(baseWeights[normalizedIdx % baseWeights.length] || 1.0);
+    }
+  }
+
+  if (contentWeights && contentWeights.length === count) {
+    const avgContent = contentWeights.reduce((a, b) => a + b, 0) / count || 1;
+    for (let i = 0; i < count; i++) {
+      const normalizedContent = avgContent > 0 ? contentWeights[i] / avgContent : 1;
+      // Blend: 55% cinematic pacing curve, 45% actual content weight — content-heavy
+      // beats (more dialogue/narration words) get materially more allocated time.
+      weights[i] = weights[i] * 0.55 + normalizedContent * 0.45;
     }
   }
 
@@ -163,6 +302,7 @@ export interface StoryContext {
   isBoth: boolean;
   storyMode: StoryMode;
   planningMode: PlanningMode;
+  isMusicProject: boolean;
 }
 
 export function analyzeStoryContext(
@@ -195,6 +335,12 @@ export function analyzeStoryContext(
   const storyMode: StoryMode = settings.storyMode || (fullStory ? 'user_refined' : 'ai_create');
   const planningMode: PlanningMode = settings.planningMode || 'ai_auto';
 
+  // Only "Kids Rhyme" and "Music" video types are actual song/lyrics projects — every
+  // other video type (Story, Educational, Documentary, Cinematic, Explainer, etc.)
+  // must use narration/dialogue, never be treated as a continuous song.
+  const videoTypeLower = (settings.videoType || '').toLowerCase();
+  const isMusicProject = videoTypeLower.includes('rhyme') || videoTypeLower.includes('music');
+
   return {
     title: idea.trim(),
     fullStory: fullStory?.trim(),
@@ -212,7 +358,22 @@ export function analyzeStoryContext(
     isBoth,
     storyMode,
     planningMode,
+    isMusicProject,
   };
+}
+
+/** Returns the names of any registered characters actually mentioned (whole word,
+ * case-insensitive) inside a given chunk of story text — used to ground story
+ * progression beats and scenes in the real character registry instead of
+ * generic placeholders like "Protagonist" / "All Characters". */
+export function namesInText(text: string, chars: CharacterProfile[]): string[] {
+  if (!text) return [];
+  return chars
+    .filter((c) => {
+      const escaped = c.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+    })
+    .map((c) => c.name);
 }
 
 // -------------------------------------------------------------
@@ -235,6 +396,11 @@ export function generateStoryUniversal(
   // Mode B2: EXACT USER STORY
   if (storyMode === 'user_exact' && rawStory) {
     const paragraphs = rawStory.split(/\n\s*\n|\n/).filter((p) => p.trim().length > 0);
+    // Extract the REAL character registry from the user's own story text (never
+    // from the project title) so progression beats reference actual characters
+    // instead of a generic "Story Characters" placeholder.
+    const exactAssets = extractAllAssetsUniversal(idea, settings, rawStory, characterInstructions);
+    let carryForwardChars: string[] = [];
     const progression: StoryProgressionBeat[] = paragraphs.map((para, i) => {
       const actNumber = i + 1;
       let actName = `Act ${actNumber}: Story Beat`;
@@ -244,11 +410,15 @@ export function generateStoryUniversal(
       else if (i === paragraphs.length - 2) actName = 'Act 4: Climax';
       else if (i === paragraphs.length - 1) actName = `Act ${actNumber}: Resolution & Conclusion`;
 
+      let beatChars = namesInText(para, exactAssets.characters);
+      if (beatChars.length === 0) beatChars = carryForwardChars;
+      if (beatChars.length > 0) carryForwardChars = beatChars;
+
       return {
         act: actName,
         title: `Beat ${actNumber}`,
         summary: para.slice(0, 150) + (para.length > 150 ? '...' : ''),
-        characters: ['Story Characters'],
+        characters: beatChars.length > 0 ? beatChars : ['Narrator'],
         keyActions: para.slice(0, 120),
         dialogueSnippet: para.includes('"') ? para.match(/"([^"]+)"/)?.[0] : undefined,
       };
@@ -265,7 +435,7 @@ export function generateStoryUniversal(
       environmentWorld: `Thematic world of ${idea} in ${style} aesthetic.`,
       progression: progression,
       progressionBeats: progression,
-      charactersInvolved: ['Story Characters'],
+      charactersInvolved: exactAssets.characters.length > 0 ? exactAssets.characters.map((c) => c.name) : ['Narrator'],
       dialogueHighlights: paragraphs.slice(0, 3).map((p) => p.slice(0, 90) + '...'),
       storyTone: settings.tone || 'Exciting',
       targetAudienceAnalysis: `${settings.audience || 'General'} audience enjoying ${style} storytelling in ${lang}`,
@@ -277,33 +447,60 @@ export function generateStoryUniversal(
     const refinedStoryText = rawStory;
     const paragraphs = refinedStoryText.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
 
+    // Extract the REAL character registry from the refined story text (never from
+    // the project title) so progression beats reference actual characters instead
+    // of generic "Protagonist" / "Companions" / "All Characters" placeholders.
+    const refinedAssets = extractAllAssetsUniversal(idea, settings, refinedStoryText, characterInstructions);
+    const allRealNames = refinedAssets.characters.map((c) => c.name);
+    // Roughly quarter the story text (by paragraph, or by beat-splitting when the
+    // story isn't paragraph-separated) so each of the 4 acts is grounded in a real
+    // slice of story content instead of being entirely generic prose.
+    const actChunks: string[] =
+      paragraphs.length >= 4
+        ? paragraphs
+        : (() => {
+            const beats = splitStoryIntoBeats(refinedStoryText);
+            const groups = mapScenesToBeats(4, beats);
+            return groups.map((g) => g.join(' '));
+          })();
+
+    const charsForAct = (chunk: string, fallback: string[]): string[] => {
+      const found = namesInText(chunk, refinedAssets.characters);
+      return found.length > 0 ? found : fallback;
+    };
+
+    const act1Chars = charsForAct(actChunks[0] || '', allRealNames.slice(0, 1));
+    const act2Chars = charsForAct(actChunks[1] || '', act1Chars);
+    const act3Chars = charsForAct(actChunks[2] || '', allRealNames);
+    const act4Chars = charsForAct(actChunks[3] || actChunks[actChunks.length - 1] || '', allRealNames);
+
     const progression: StoryProgressionBeat[] = [
       {
         act: 'Act 1: Hook & Setting the Stakes',
         title: 'Opening Discovery',
-        summary: paragraphs[0] || `Introduction to the world of ${idea}.`,
-        characters: ['Protagonist'],
+        summary: paragraphs[0] || actChunks[0] || `Introduction to the world of ${idea}.`,
+        characters: act1Chars.length > 0 ? act1Chars : ['Narrator'],
         keyActions: 'Arrival, initial observation, discovering unexpected signals.',
       },
       {
         act: 'Act 2: Rising Action & Exploration',
         title: 'Journey Unfolds',
-        summary: paragraphs[1] || `The adventure deepens with exciting exploration and obstacle solving.`,
-        characters: ['Protagonist', 'Companions'],
+        summary: paragraphs[1] || actChunks[1] || `The adventure deepens with exciting exploration and obstacle solving.`,
+        characters: act2Chars.length > 0 ? act2Chars : ['Narrator'],
         keyActions: 'Navigating obstacles, discovering vital clues.',
       },
       {
         act: 'Act 3: Turning Point & Discovery',
         title: 'The Core Secret',
-        summary: paragraphs[2] || `A dramatic revelation reshapes everything known so far.`,
-        characters: ['Protagonist', 'Key Characters'],
+        summary: paragraphs[2] || actChunks[2] || `A dramatic revelation reshapes everything known so far.`,
+        characters: act3Chars.length > 0 ? act3Chars : ['Narrator'],
         keyActions: 'Unlocking the central mystery, confronting unexpected stakes.',
       },
       {
         act: 'Act 4: The Climax & Resolution',
         title: 'Triumph and Renewal',
-        summary: paragraphs[3] || paragraphs[paragraphs.length - 1] || `A triumphant conclusion uniting the characters in joy and accomplishment.`,
-        characters: ['All Characters'],
+        summary: paragraphs[3] || paragraphs[paragraphs.length - 1] || actChunks[3] || `A conclusion uniting the characters.`,
+        characters: act4Chars.length > 0 ? act4Chars : ['Narrator'],
         keyActions: 'Mastery, triumphant realization, and lasting legacy.',
       },
     ];
@@ -319,7 +516,7 @@ export function generateStoryUniversal(
       environmentWorld: `Vibrant visual world of ${idea} rendered in ${style} aesthetic.`,
       progression: progression,
       progressionBeats: progression,
-      charactersInvolved: ['Protagonist', 'Companions', 'All Characters'],
+      charactersInvolved: allRealNames.length > 0 ? allRealNames : ['Narrator'],
       dialogueHighlights: [
         'Engaging moments of discovery and camaraderie.',
         'High-stakes turning points and wondrous revelations.',
@@ -332,33 +529,49 @@ export function generateStoryUniversal(
 
   // Mode A: AI CREATE COMPLETE STORY
   const storyText = createUniversalStoryText(idea, settings, characterInstructions);
+  // Extract the REAL character registry from the generated story text itself so
+  // progression beats reference actual characters instead of generic "Lead
+  // Explorer" / "Protagonist" / "All Characters" placeholders.
+  const createdAssets = extractAllAssetsUniversal(idea, settings, storyText, characterInstructions);
+  const createdNames = createdAssets.characters.map((c) => c.name);
+  const createdBeats = splitStoryIntoBeats(storyText);
+  const createdActChunks = mapScenesToBeats(4, createdBeats).map((g) => g.join(' '));
+  const actCharsOrFallback = (chunk: string, fallback: string[]): string[] => {
+    const found = namesInText(chunk, createdAssets.characters);
+    return found.length > 0 ? found : fallback;
+  };
+  const cAct1 = actCharsOrFallback(createdActChunks[0] || '', createdNames.slice(0, 1));
+  const cAct2 = actCharsOrFallback(createdActChunks[1] || '', cAct1.length > 0 ? cAct1 : createdNames);
+  const cAct3 = actCharsOrFallback(createdActChunks[2] || '', createdNames);
+  const cAct4 = actCharsOrFallback(createdActChunks[3] || '', createdNames);
+
   const beats: StoryProgressionBeat[] = [
     {
       act: 'Act 1: Opening Hook & World Setup',
       title: 'The Spark of Wonder',
-      summary: `Our characters arrive in the extraordinary realm of "${idea}". Immediate visual curiosity grabs the viewer.`,
-      characters: ['Lead Explorer / Protagonist'],
+      summary: createdActChunks[0] || `Our characters arrive in the extraordinary realm of "${idea}". Immediate visual curiosity grabs the viewer.`,
+      characters: cAct1.length > 0 ? cAct1 : ['Narrator'],
       keyActions: 'Stepping into the unknown, identifying the primary wonder or mystery.',
     },
     {
       act: 'Act 2: Rising Adventure & Escalation',
       title: 'Deeper into the Realm',
-      summary: 'Exploring wondrous landmarks, solving playful challenges, and building dynamic character chemistry.',
-      characters: ['Protagonist', 'Supporting Companion'],
+      summary: createdActChunks[1] || 'Exploring wondrous landmarks, solving playful challenges, and building dynamic character chemistry.',
+      characters: cAct2.length > 0 ? cAct2 : ['Narrator'],
       keyActions: 'Overcoming environmental obstacles, unlocking visual wonders.',
     },
     {
       act: 'Act 3: Climax & The Grand Secret',
       title: 'The Pivotal Revelation',
-      summary: 'The ultimate mystery is revealed in a burst of cinematic light, sound, and emotional triumph.',
-      characters: ['All Characters'],
+      summary: createdActChunks[2] || 'The ultimate mystery is revealed in a burst of cinematic light, sound, and emotional triumph.',
+      characters: cAct3.length > 0 ? cAct3 : ['Narrator'],
       keyActions: 'Reaching the central summit, activating the source of wonder.',
     },
     {
       act: 'Act 4: Heartfelt Resolution',
       title: 'A Legacy of Wonder',
-      summary: 'Celebrating unity, new friendship, and the eternal beauty of the completed adventure.',
-      characters: ['All Characters'],
+      summary: createdActChunks[3] || 'Celebrating unity, new friendship, and the eternal beauty of the completed adventure.',
+      characters: cAct4.length > 0 ? cAct4 : ['Narrator'],
       keyActions: 'Triumphant celebration, horizon gaze, and inspiring closing words.',
     },
   ];
@@ -373,7 +586,7 @@ export function generateStoryUniversal(
     environmentWorld: `Rich, immersive environments designed with ${style} lighting and vibrant depth.`,
     progression: beats,
     progressionBeats: beats,
-    charactersInvolved: ['Lead Explorer', 'Companions', 'All Characters'],
+    charactersInvolved: createdNames.length > 0 ? createdNames : ['Narrator'],
     dialogueHighlights: [
       'Memorable opening question inviting immediate curiosity.',
       'Rhythmic and engaging character interactions.',
@@ -442,6 +655,11 @@ export function extractAllAssetsUniversal(
   // Common grammatical / filler words (English + romanized Hindi + Devanagari) that must
   // NEVER be treated as a character name, however they are capitalized in the raw text.
   const STOP_WORDS = new Set([
+    'i', 'me', 'my', 'mine', 'myself', 'we', 'us', 'our', 'ours', 'ourselves',
+    'you', 'your', 'yours', 'yourself', 'yourselves',
+    'he', 'him', 'his', 'himself', 'she', 'her', 'hers', 'herself',
+    'it', 'its', 'itself', 'they', 'them', 'their', 'theirs', 'themselves',
+    'who', 'whom', 'whose', 'which', 'what',
     'two friends', 'three friends', 'four friends', 'his friends', 'her friends', 'their friends',
     'my friends', 'best friends', 'good friends', 'the friends', 'friends', 'two sisters', 'three sisters',
     'the sisters', 'two brothers', 'the brothers', 'two companions', 'the companions', 'companions',
@@ -534,7 +752,7 @@ export function extractAllAssetsUniversal(
     return storyNarrative.slice(start, end);
   };
 
-  const addEntity = (rawName: string, index: number) => {
+  const addEntity = (rawName: string, index: number, confidence: 'high' | 'low' = 'high') => {
     const clean = rawName.trim().replace(/^[\s,.;:!?\-'"()]+|[\s,.;:!?\-'"()]+$/g, '');
     if (!clean || clean.length < 2) return;
     const lower = clean.toLowerCase();
@@ -545,6 +763,13 @@ export function extractAllAssetsUniversal(
     // Reject candidates that are actually generic species/common nouns (e.g. "Fox" at a
     // sentence boundary) rather than a character's given name.
     if (SPECIES_LIBRARY.some((s) => s.pattern.test(clean) && clean.length < 12 && new RegExp(`^${s.pattern.source}$`, 'i').test(clean))) return;
+    // Low-confidence candidates (the broad generic capitalized-word scan, PASS 4)
+    // reject common English gerunds/participles (e.g. "Guided", "Leveraging") that
+    // are capitalized only because they start a sentence in template prose — real
+    // given names essentially never take this shape. Higher-confidence passes
+    // (explicit "named X", instructions, pair patterns) are exempt so genuine
+    // names like "King" or "Ming" are never rejected.
+    if (confidence === 'low' && /^[A-Z][a-z]*(?:ing|ed)$/.test(clean) && clean.length > 4) return;
 
     // Do NOT extract if this word is merely the project title itself and not in the story text
     if (clean.toLowerCase() === idea.trim().toLowerCase() && !storyNarrative.includes(clean)) {
@@ -602,7 +827,11 @@ export function extractAllAssetsUniversal(
     if (match[2]) addEntity(match[2], match.index);
   }
 
-  const roleNamedMatches = storyNarrative.matchAll(/(?:named|called|sister|brother|friend|dost|explorer|photographer|detective|scientist|captain|hero|princess|king|doctor)\s+([A-Z][a-z]+)\b/gi);
+  // NOTE: intentionally no 'i' flag here — with case-insensitivity the [A-Z] in the
+  // capture group would also match lowercase letters, letting a keyword like "named"
+  // match itself as if it were the captured name. The keyword alternation is written
+  // in lowercase, which is how these role-introduction phrases normally appear.
+  const roleNamedMatches = storyNarrative.matchAll(/(?:named|called|sister|brother|friend|dost|explorer|photographer|detective|scientist|captain|hero|princess|king|doctor)\s+([A-Z][a-z]+)\b/g);
   for (const match of roleNamedMatches) {
     if (match[1] && match.index !== undefined) addEntity(match[1], match.index);
   }
@@ -625,7 +854,7 @@ export function extractAllAssetsUniversal(
 
   for (const [word, indices] of capitalizedOccurrences) {
     if (STOP_WORDS.has(word.toLowerCase()) || GENERIC_ROLE_WORDS.has(word.toLowerCase())) continue;
-    addEntity(word, indices[0]);
+    addEntity(word, indices[0], 'low');
   }
 
   // -------------------------------------------------------------
@@ -804,21 +1033,10 @@ export function extractAllAssetsUniversal(
 
   // -------------------------------------------------------------
   // DEFAULT PROPS & ENVIRONMENTS (Narrative-Aware, generic keyword driven)
+  // Uses the shared, module-level SETTING_LIBRARY so scene planning later
+  // derives the SAME environment classification instead of rediscovering it.
   // -------------------------------------------------------------
   const lowerStory = storyNarrative.toLowerCase();
-  const SETTING_LIBRARY: Array<{ pattern: RegExp; label: string; description: string; lighting: string; timeOfDay: string }> = [
-    { pattern: /jungle|forest|van\b/i, label: 'Ancient Jungle', description: 'Ancient dense jungle with towering trees, moss-covered rocks, a winding forest path, and soft morning mist.', lighting: 'Dappled sunlight filtering through the forest canopy', timeOfDay: 'Morning' },
-    { pattern: /ocean|sea|samundar|underwater|undersea/i, label: 'Undersea World', description: 'Vivid undersea world with coral reefs, drifting light rays, and gentle currents.', lighting: 'Soft blue-green caustic light rippling through water', timeOfDay: 'Midday' },
-    { pattern: /river|kinare|yamuna|ganga|stream/i, label: 'Riverside', description: 'Tranquil riverside with flowing water, smooth pebbles, and overhanging trees.', lighting: 'Warm golden-hour light reflecting off the water', timeOfDay: 'Golden Hour' },
-    { pattern: /city|shehar|town|street/i, label: 'City Streets', description: 'Bustling city streets with tall buildings, warm shopfront lights, and gentle background activity.', lighting: 'Warm ambient city lighting with soft shadows', timeOfDay: 'Evening' },
-    { pattern: /space|galaxy|planet|star(s)?\b/i, label: 'Outer Space', description: 'Vast starlit expanse with distant nebulae and a softly glowing planet in the background.', lighting: 'Cool starlight with subtle nebula color washes', timeOfDay: 'Timeless' },
-    { pattern: /desert|registan/i, label: 'Desert Dunes', description: 'Sweeping golden desert dunes with rippling sand patterns and a wide open sky.', lighting: 'Warm harsh sunlight with long dramatic shadows', timeOfDay: 'Afternoon' },
-    { pattern: /mountain|pahad/i, label: 'Mountain Range', description: 'Dramatic mountain range with rocky outcrops, thin mist, and a winding trail.', lighting: 'Crisp cool light with distant haze', timeOfDay: 'Morning' },
-    { pattern: /palace|kingdom|rajmahal|mahal/i, label: 'Royal Palace', description: 'Ornate royal palace interior with tall pillars, rich fabrics, and warm lantern light.', lighting: 'Warm golden lantern and candle light', timeOfDay: 'Evening' },
-    { pattern: /cave|gufa/i, label: 'Hidden Cave', description: 'Atmospheric hidden cave with glowing crystal formations and echoing chambers.', lighting: 'Soft bioluminescent glow from crystal formations', timeOfDay: 'N/A (Interior)' },
-    { pattern: /village|gaon/i, label: 'Countryside Village', description: 'Warm countryside village with thatched roofs, open courtyards, and simple lanes.', lighting: 'Soft natural daylight with warm undertones', timeOfDay: 'Daytime' },
-  ];
-
   const primarySetting = SETTING_LIBRARY.find((s) => s.pattern.test(lowerStory));
 
   props.push({
@@ -1114,11 +1332,67 @@ export function generateScenesUniversal(
   const registeredProps = propsList && propsList.length > 0 ? propsList : assetPackage.props;
   const registeredEnvs = environmentsList && environmentsList.length > 0 ? environmentsList : assetPackage.environments;
 
+  // -------------------------------------------------------------
+  // STORY-AWARE PLANNING: split the actual production story text (never the
+  // project title/idea) into narrative beats, then map those beats onto the
+  // requested scene count. Every scene below is grounded in a real slice of
+  // story text (storySourceText) instead of being assembled purely from
+  // rotating registry positions.
+  // -------------------------------------------------------------
+  const activeStoryText = (
+    fullStory ||
+    settings.fullStory ||
+    settings.refinedStory ||
+    settings.storyText ||
+    ''
+  ).trim();
+  const storyBeats = splitStoryIntoBeats(activeStoryText);
+  const beatGroups = mapScenesToBeats(actualCount, storyBeats);
+
+  // Data-driven character introduction: use each character's REAL first-mention
+  // beat position in the story (not an artificial "first 3 cluster" or a purely
+  // proportional guess). A character is introduced at the scene whose beat group
+  // first contains their name, and persists (same stable ID) in every scene from
+  // then on, matching the single-source-of-truth character registry.
+  const charFirstBeat = new Map<string, number>();
+  registeredChars.forEach((c) => {
+    charFirstBeat.set(c.id, findCharacterFirstBeat(c.name, storyBeats));
+  });
+  const charIntroScene = new Map<string, number>();
+  registeredChars.forEach((c) => {
+    const beatIdx = charFirstBeat.get(c.id) ?? -1;
+    if (beatIdx === -1 || storyBeats.length === 0) {
+      // Name not literally found in the story text (e.g. inferred/generic
+      // character) — fall back to introducing them alongside the initial cast.
+      charIntroScene.set(c.id, 0);
+      return;
+    }
+    let sceneIdx = 0;
+    for (let s = 0; s < beatGroups.length; s++) {
+      if (beatGroups[s].some((b) => storyBeats[beatIdx] === b)) {
+        sceneIdx = s;
+        break;
+      }
+    }
+    charIntroScene.set(c.id, sceneIdx);
+  });
+
+  // Per-scene content weight (word count of the mapped story beat text) drives
+  // AI Auto duration allocation so dialogue/narration-heavy beats get more time
+  // than a short transitional beat, instead of dividing time equally or by
+  // position alone.
+  const contentWeights = beatGroups.map((group) => {
+    const text = group.join(' ');
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+    return Math.max(1, wordCount);
+  });
+
   const sceneDurations = calculateSceneDurationsUniversal(
     ctx.totalSec,
     actualCount,
     ctx.planningMode,
-    ctx.sceneSec
+    ctx.sceneSec,
+    ctx.planningMode === 'ai_auto' ? contentWeights : undefined
   );
 
   let cumulativeSeconds = 0;
@@ -1139,39 +1413,54 @@ export function generateScenesUniversal(
     const isFirst = i === 0;
     const isLast = i === actualCount - 1;
 
-    // Determine Environment strictly from registered list
-    const envObj = registeredEnvs[i % registeredEnvs.length] || registeredEnvs[0];
+    const beatGroupForScene = beatGroups[i] || [];
+    const storyBeatText = beatGroupForScene.join(' ').trim();
+
+    // Determine Environment from the ACTUAL story beat text for this scene first
+    // (matching the same shared SETTING_LIBRARY used during asset extraction);
+    // only fall back to rotating the registered environment list when the beat
+    // text gives no location signal.
+    const beatSetting = storyBeatText
+      ? SETTING_LIBRARY.find((s) => s.pattern.test(storyBeatText.toLowerCase()))
+      : undefined;
+    const envFromBeat = beatSetting ? registeredEnvs.find((e) => e.displayName === beatSetting.label) : undefined;
+    const envObj = envFromBeat || registeredEnvs[i % registeredEnvs.length] || registeredEnvs[0];
     const envId = envObj?.id || 'PRIMARY_ENVIRONMENT';
     const envDisplayName = envObj?.displayName || envObj?.description || envId;
 
-    // Determine Characters for this scene strictly from registered list.
-    // All registered characters are treated as first-class citizens (not just a single
-    // "lead" plus rotating extras): the first few characters that appear together in the
-    // story are present from Scene 1, and any characters introduced later in the story
-    // are progressively brought in — then, once introduced, a character continues to be
-    // referenced by the SAME stable ID in every following scene (single source of truth).
-    let sceneCharIds: string[] = [];
-    if (registeredChars.length > 0) {
-      const initialGroupSize = Math.min(3, registeredChars.length);
-      const remainingCount = registeredChars.length - initialGroupSize;
-      const introduceAtScene = (charIdx: number): number => {
-        if (charIdx < initialGroupSize) return 0;
-        if (remainingCount <= 0 || actualCount <= 1) return 0;
-        const remainingIdx = charIdx - initialGroupSize;
-        return Math.min(actualCount - 1, 1 + Math.floor((remainingIdx * (actualCount - 1)) / remainingCount));
-      };
-      sceneCharIds = registeredChars
-        .filter((_, charIdx) => introduceAtScene(charIdx) <= i)
-        .map((c) => c.id);
+    // Determine Characters for this scene from the STORY, not array position:
+    // every registered character whose real first-mention scene (computed above
+    // from actual story text) is at or before this scene is present — a
+    // character is never forced into a scene before the story has introduced
+    // them, and once introduced they keep the same stable ID going forward.
+    let sceneCharIds: string[] = registeredChars
+      .filter((c) => (charIntroScene.get(c.id) ?? 0) <= i)
+      .map((c) => c.id);
+    // If literally no character has been introduced by this point (e.g. a
+    // purely ambient opening beat before anyone is named), and this is the
+    // very first scene, avoid an entirely characterless establishing shot only
+    // when the registry itself is non-empty — otherwise leave it empty, which
+    // is the story-accurate result for a genuinely characterless beat.
+    if (sceneCharIds.length === 0 && isFirst && registeredChars.length > 0 && storyBeats.length === 0) {
+      sceneCharIds = [registeredChars[0].id];
     }
 
-    // Determine Props for this scene strictly from registered list
+    // Determine Props for this scene from the ACTUAL story beat text (shared
+    // PROP_LIBRARY) — a prop is only placed in a scene when the beat text that
+    // maps to it actually mentions it, so props are never spawned randomly.
     const scenePropIds: string[] = [];
-    if (registeredProps.length > 0) {
-      const propForScene = registeredProps[i % registeredProps.length];
-      if (propForScene) {
-        scenePropIds.push(propForScene.id);
+    if (storyBeatText) {
+      for (const propEntry of PROP_LIBRARY) {
+        if (propEntry.pattern.test(storyBeatText)) {
+          const match = registeredProps.find((p) => p.displayName?.toLowerCase().includes(propEntry.label.toLowerCase()));
+          if (match && !scenePropIds.includes(match.id)) scenePropIds.push(match.id);
+        }
       }
+    }
+    if (scenePropIds.length === 0 && registeredProps.length > 0 && !storyBeatText) {
+      // No story text to ground props against (e.g. legacy project) — preserve
+      // prior behavior of referencing the registered prop for continuity.
+      scenePropIds.push(registeredProps[i % registeredProps.length].id);
     }
 
     // Continuity tracking
@@ -1180,28 +1469,34 @@ export function generateScenesUniversal(
     const propsContinuing = scenePropIds.filter((id) => previousSceneProps.includes(id));
     const environmentContinuing = envId === previousEnvId;
 
-    // Action narrative with NO SPAWNING RULES
+    // Visual action/blocking description — used for the CAMERA/VIDEO PROMPT only
+    // (never placed into Narrator dialogue; see dialogue construction below).
     let startingAction = '';
     let finalAction = '';
     let actionDesc = '';
+    const sceneCharNames = sceneCharIds
+      .map((cid) => registeredChars.find((c) => c.id === cid)?.name)
+      .filter(Boolean)
+      .join(' and ');
 
     if (isFirst) {
-      startingAction = `${sceneCharIds[0] || 'The protagonist'} stands ready at the edge of ${envDisplayName}.`;
-      finalAction = `${sceneCharIds[0] || 'The protagonist'} gestures forward, inviting everyone onto the path.`;
-      actionDesc = `${startingAction} The morning light illuminates the path. ${finalAction}`;
+      startingAction = `${sceneCharNames || 'The scene'} is established at ${envDisplayName}.`;
+      finalAction = `The scene settles into motion as the story beat unfolds.`;
+      actionDesc = storyBeatText
+        ? `${startingAction} ${storyBeatText}`
+        : `${startingAction} ${finalAction}`;
     } else {
       if (newCharactersIntroduced.length > 0) {
-        startingAction = `Continuing from Scene ${sceneNum - 1}: ${newCharactersIntroduced.join(', ')} is already visible in ${envDisplayName} before the main group approaches.`;
+        const newNames = newCharactersIntroduced
+          .map((id) => registeredChars.find((c) => c.id === id)?.name)
+          .filter(Boolean)
+          .join(', ');
+        startingAction = `${newNames} is newly present in ${envDisplayName} as this beat of the story unfolds.`;
       } else {
-        startingAction = `Continuing smoothly from Scene ${sceneNum - 1}: ${sceneCharIds.join(' and ')} continue their synchronized movement.`;
+        startingAction = `${sceneCharNames || 'The scene'} continues in ${envDisplayName}.`;
       }
-
-      if (scenePropIds.length > 0) {
-        startingAction += ` ${scenePropIds[0]} is already stationed in the setting as characters interact with it naturally.`;
-      }
-
-      finalAction = `${sceneCharIds.join(' and ')} complete the sequence with joyful expressions, looking toward the next vista.`;
-      actionDesc = `${startingAction} Engaging rhythmic interaction in ${envDisplayName}. ${finalAction}`;
+      finalAction = `The beat concludes, carrying its outcome into the next scene.`;
+      actionDesc = storyBeatText ? `${startingAction} ${storyBeatText}` : `${startingAction} ${finalAction}`;
     }
 
     // Update continuity history
@@ -1228,35 +1523,59 @@ export function generateScenesUniversal(
       props: scenePropIds,
     };
 
-    // No voice mode in this project supports song/lyrics generation, so narrative text is
-    // NEVER converted into lyrics. lyricLines stays empty unless a future song feature adds
-    // real generated lines explicitly (kept as a field for backward compatibility only).
+    // No voice mode in this project supports song/lyrics generation unless this
+    // is actually a Kids Rhyme / Music video type, so narrative text is NEVER
+    // converted into lyrics for ordinary Story/Documentary/Educational/etc.
+    // projects. lyricLines stays empty unless the project genuinely is a
+    // song-type project (kept as a field for backward compatibility only).
     const lyricLines: string[] = [];
 
     const sTitle = `Scene ${sceneNum}: ${envDisplayName}`;
 
-    // Build mode-aware dialogue with an explicit, existing character ID as speaker for every
-    // spoken line. Narration and character dialogue are never merged into one generic line,
-    // and the same line is never assigned to every character.
+    // Build story-grounded, mode-aware dialogue with an explicit, existing
+    // character ID as speaker for every spoken line. Real quoted dialogue in
+    // the story beat is used verbatim with correct speaker attribution when
+    // present; the Narrator's line is the actual story beat text (never the
+    // internal camera/action-blocking text above), so no production
+    // instructions ever leak into spoken narration.
+    const sceneCharsForDialogue = sceneCharIds
+      .map((cid) => registeredChars.find((c) => c.id === cid))
+      .filter((c): c is CharacterProfile => Boolean(c));
+    const quotedLines = storyBeatText ? extractQuotedDialogue(storyBeatText, sceneCharsForDialogue) : [];
+    const narratorLineText = storyBeatText || `${sceneCharNames || 'The scene'} in ${envDisplayName}.`;
+
     let dialogue = 'NONE (No Spoken Dialogue — background score and Foley only)';
     if (!ctx.isNoSpoken) {
-      const sceneCharsForDialogue = sceneCharIds
-        .map((cid) => registeredChars.find((c) => c.id === cid))
-        .filter((c): c is CharacterProfile => Boolean(c));
-
-      if (ctx.isNarratorOnly || sceneCharsForDialogue.length === 0) {
-        dialogue = `Speaker: Narrator\nLine: "${actionDesc}"`;
+      if (ctx.isNarratorOnly) {
+        dialogue = `Speaker: Narrator\nLine: "${narratorLineText}"`;
       } else if (ctx.isCharOnly) {
-        dialogue = sceneCharsForDialogue
-          .map((c) => `Speaker: ${c.name} [${c.id}]\nLine: "${c.name}, reacting to ${envDisplayName}, speaks in character about the current story beat."`)
-          .join('\n');
+        if (quotedLines.length > 0) {
+          dialogue = quotedLines.map((q) => `Speaker: ${q.speakerName} [${q.speakerId}]\nLine: "${q.line}"`).join('\n');
+        } else if (ctx.storyMode !== 'user_exact' && sceneCharsForDialogue.length > 0) {
+          // No explicit quotes in the source text: only synthesize a beat-grounded
+          // line when the story is allowed to be AI-authored/refined. "Use My
+          // Story Exactly" mode must never invent dialogue that was not there.
+          dialogue = sceneCharsForDialogue
+            .map((c) => `Speaker: ${c.name} [${c.id}]\nLine: "${storyBeatText ? storyBeatText : `${c.name} reacts to ${envDisplayName}.`}"`)
+            .join('\n');
+        } else {
+          dialogue = `Speaker: Narrator\nLine: "${narratorLineText}" (No explicit character dialogue in the source story for this beat.)`;
+        }
       } else {
-        // Narrator + Character Dialogue: a narration line, plus one distinct line per
-        // character actually present in the scene, each with its own explicit speaker.
-        const narratorLine = `Speaker: Narrator\nLine: "${actionDesc}"`;
-        const charLines = sceneCharsForDialogue
-          .map((c) => `Speaker: ${c.name} [${c.id}]\nLine: "${c.name} responds in character to the unfolding scene."`)
-          .join('\n');
+        // Narrator + Character Dialogue: narration line from the real story beat,
+        // plus any actual quoted lines found in that beat, each with its own
+        // explicit speaker. If no quotes exist, only add a synthetic character
+        // line outside "Use My Story Exactly" mode.
+        const narratorLine = `Speaker: Narrator\nLine: "${narratorLineText}"`;
+        let charLines = '';
+        if (quotedLines.length > 0) {
+          charLines = quotedLines.map((q) => `Speaker: ${q.speakerName} [${q.speakerId}]\nLine: "${q.line}"`).join('\n');
+        } else if (ctx.storyMode !== 'user_exact' && sceneCharsForDialogue.length > 0 && newCharactersIntroduced.length > 0) {
+          const introducedChar = sceneCharsForDialogue.find((c) => newCharactersIntroduced.includes(c.id));
+          if (introducedChar) {
+            charLines = `Speaker: ${introducedChar.name} [${introducedChar.id}]\nLine: "${introducedChar.name} is introduced in this beat."`;
+          }
+        }
         dialogue = charLines ? `${narratorLine}\n${charLines}` : narratorLine;
       }
     }
@@ -1289,6 +1608,9 @@ export function generateScenesUniversal(
       charactersPresent: sceneCharIds,
       props: scenePropIds,
       characterActions: actionDesc,
+      storyBeat: storyBeatText || undefined,
+      storySourceText: storyBeatText || undefined,
+      sceneSummary: storyBeatText ? storyBeatText.slice(0, 220) : actionDesc.slice(0, 220),
       dialogue,
       dialogueVoiceover: dialogue,
       spokenDialogueType: ctx.isNoSpoken ? 'none' : 'dialogue',
@@ -1296,10 +1618,10 @@ export function generateScenesUniversal(
       cameraAngleMotion: i % 2 === 0 ? '35mm anamorphic tracking shot with smooth lateral dolly' : 'Dynamic low-angle crane sweep rising gently',
       lightingMood: envObj?.lighting || 'Volumetric cinematic three-point lighting with soft rim rays',
       animationStyle: `${style} with natural physical inertia and secondary cloth/hair physics`,
-      soundEffects: 'Diegetic environmental Foley and sparkling melodic accents',
-      musicCue: `Musical phrase ${sceneNum} matching project tempo and key`,
+      soundEffects: 'Diegetic environmental Foley and ambient atmosphere',
+      musicCue: `Score cue ${sceneNum} matching project tone and pacing`,
       continuityNote: `Inherits visual state and positions from Scene ${sceneNum - 1}. No character or prop spawning.`,
-      scenePurpose: `Advance story progression and rhyme phrase in Scene ${sceneNum}.`,
+      scenePurpose: `Advance the story beat: ${storyBeatText ? storyBeatText.slice(0, 140) : `progression of Scene ${sceneNum}`}.`,
       aiVideoPrompt: `Cinematic ${aspect}, ${style}, "${sTitle}". Action: ${actionDesc}. Environment: ${envDisplayName}. ${charPromptPart} Props: ${scenePropIds.length > 0 ? scenePropIds.join(', ') : 'NONE'}. 8K render --ar ${aspect}`,
       characterLockedPrompt,
       assetDependencies,
@@ -1437,8 +1759,10 @@ export function generateVideoPromptsUniversal(
             .join(' | ')
         : 'NONE (No primary props in shot)';
 
-    // Lyrics / Dialogue
-    const lyricsText =
+    // Dialogue / Narration text for this scene (real story-grounded content from
+    // generateScenesUniversal — never lyrics unless this is genuinely a Kids
+    // Rhyme / Music project, in which case scene.lyricLines would be populated).
+    const audioText =
       scene.lyricLines && scene.lyricLines.length > 0
         ? scene.lyricLines.join('\n')
         : scene.dialogue || scene.spokenDialogue || 'NO SPOKEN DIALOGUE (Background score and Foley only)';
@@ -1479,8 +1803,12 @@ export function generateVideoPromptsUniversal(
       })
       .join('\n');
 
-    // Music and Singing Lock
-    const musicAndSingingText = `Project Music Lock: ${mLock.songStyle}, Tempo: ${mLock.tempo}, Key: ${mLock.key}. Singer: ${mLock.singer}. Vocalist Voice Lock: ${vLock.voiceId} (${vLock.ageImpression}, ${vLock.tone}, ${vLock.pronunciation}). Current lyrics are the next musical phrase of the SAME continuous song.`;
+    // Music / Voice Lock — only framed as a continuous song for genuine Kids
+    // Rhyme / Music projects. Every other video type gets a plain score/voice
+    // continuity note, never "the next musical phrase of the same song".
+    const musicAndSingingText = ctx.isMusicProject
+      ? `Project Music Lock: ${mLock.songStyle}, Tempo: ${mLock.tempo}, Key: ${mLock.key}. Singer: ${mLock.singer}. Vocalist Voice Lock: ${vLock.voiceId} (${vLock.ageImpression}, ${vLock.tone}, ${vLock.pronunciation}). Current lyrics are the next musical phrase of the SAME continuous song.`
+      : `Background Score Lock: ${mLock.songStyle} mood, Tempo: ${mLock.tempo}. Narrator/Character Voice Lock: ${vLock.voiceId} (${vLock.ageImpression}, ${vLock.tone}, ${vLock.pronunciation}). Continue the established score mood from the previous scene; this is narration/dialogue, not song lyrics.`;
 
     // Animation & Camera
     const animationText = `${style} aesthetic with smooth 24fps motion blur, fluid cloth dynamics, and expressive character bounce.`;
@@ -1500,7 +1828,7 @@ export function generateVideoPromptsUniversal(
       characters: charConstraints,
       environment: envPromptText,
       props: propsPromptText,
-      lyrics: lyricsText,
+      lyrics: audioText,
       continuity: continuityText,
       action: actionText,
       characterConsistency: consistencyText,
@@ -1511,19 +1839,22 @@ export function generateVideoPromptsUniversal(
       endContinuity: endContinuityText,
     };
 
+    const audioSectionLabel = ctx.isMusicProject ? 'LYRICS:' : 'DIALOGUE / NARRATION:';
+    const musicSectionLabel = ctx.isMusicProject ? 'MUSIC AND SINGING:' : 'MUSIC / VOICE CONTINUITY:';
+
     const finalPrompt = `Prompt ${promptNum}:
 DURATION: ${duration}
 CHARACTERS:
 ${charConstraints}
 ENVIRONMENT: ${envPromptText}
 PROPS: ${propsPromptText}
-LYRICS / DIALOGUE:
-${lyricsText}
+${audioSectionLabel}
+${audioText}
 CONTINUITY: ${continuityText}
 ACTION: ${actionText}
 CHARACTER CONSISTENCY:
 ${consistencyText}
-MUSIC AND SINGING: ${musicAndSingingText}
+${musicSectionLabel} ${musicAndSingingText}
 ANIMATION: ${animationText}
 CAMERA: ${cameraText}
 NEGATIVE: ${negativeText}
@@ -1531,11 +1862,11 @@ END CONTINUITY: ${endContinuityText}`;
 
     // Model Specific Prompts
     const modelPrompts: ModelSpecificPrompts = {
-      veo: `Google Veo Prompt ${promptNum}: ${style} video (${duration}). Action: ${actionText}. Environment: ${envPromptText}. Characters: ${charConstraints}. Camera: ${cameraText}. Audio: ${lyricsText}. --ar ${aspect}`,
+      veo: `Google Veo Prompt ${promptNum}: ${style} video (${duration}). Action: ${actionText}. Environment: ${envPromptText}. Characters: ${charConstraints}. Camera: ${cameraText}. Audio: ${audioText}. --ar ${aspect}`,
       runway: `Runway Gen-3 Prompt ${promptNum}: [${cameraText}] [${actionText}] [${envPromptText}] Characters: ${charConstraints}. Duration: ${durSec}s, ${style} 8K render --ar ${aspect}`,
       kling: `Kling AI Prompt ${promptNum}: Master shot (${durSec}s | ${scene.timeRange}), ${style}, ${actionText} in ${envPromptText}. Characters: ${charConstraints}. Aspect ratio: ${aspect}. ${cameraText}`,
       luma: `Luma Dream Machine Prompt ${promptNum}: Smooth ${cameraText} (${durSec}s) capturing ${actionText}. Environment: ${envPromptText}. Characters: ${charConstraints}. Aspect ${aspect}.`,
-      sora: `OpenAI Sora Prompt ${promptNum}: Hyper-detailed cinematic sequence (${durSec}s) in ${style} aspect ratio ${aspect}. In ${envPromptText}, ${actionText}. Characters: ${charConstraints}. Audio: ${lyricsText}. Camera: ${cameraText}`,
+      sora: `OpenAI Sora Prompt ${promptNum}: Hyper-detailed cinematic sequence (${durSec}s) in ${style} aspect ratio ${aspect}. In ${envPromptText}, ${actionText}. Characters: ${charConstraints}. Audio: ${audioText}. Camera: ${cameraText}`,
     };
 
     return {
@@ -1552,7 +1883,9 @@ END CONTINUITY: ${endContinuityText}`;
       characterIdentityLock: consistencyText,
       environment: envPromptText,
       action: actionText,
-      facialExpressions: 'Emotionally expressive gaze matching song cadence and discovery',
+      facialExpressions: ctx.isMusicProject
+        ? 'Emotionally expressive gaze matching song cadence and discovery'
+        : 'Emotionally expressive gaze matching the story beat\'s mood and intent',
       bodyMovement: 'Natural kinetic physical blocking and rhythmic step-wise motion',
       cameraShot: 'Medium Master Shot',
       cameraMovement: scene.cameraAngleMotion,
@@ -1561,7 +1894,7 @@ END CONTINUITY: ${endContinuityText}`;
       atmosphere: 'Volumetric light beams and luminous atmospheric particles',
       animationStyle: animationText,
       physicsMotion: 'Realistic cloth simulation and natural hair dynamics',
-      dialogue: lyricsText,
+      dialogue: audioText,
       voiceAudio: musicAndSingingText,
       soundEffects: scene.soundEffects || 'Diegetic environmental Foley',
       music: mLock.songStyle,
