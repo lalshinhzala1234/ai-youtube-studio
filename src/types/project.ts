@@ -432,6 +432,9 @@ export interface SceneBreakdown {
   continuity?: SceneContinuityInfo;
   lyricLines?: string[];
   props?: string[];
+  storyBeat?: string;
+  storySourceText?: string;
+  sceneSummary?: string;
 }
 
 export interface ModelSpecificPrompts {
