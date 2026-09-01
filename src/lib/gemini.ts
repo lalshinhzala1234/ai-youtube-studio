@@ -654,6 +654,14 @@ Each scene MUST have durationSeconds = ${avgSecondsPerScene}.
 Timestamps must be continuous without gaps (e.g. 00:00 - 00:${avgSecondsPerScene < 10 ? '0' : ''}${avgSecondsPerScene}, etc.).
 Maintain strict continuity: character appearances, locations, and actions must flow logically.
 
+CRITICAL STORY-AWARE ASSIGNMENT RULES:
+1. NEVER force every registered character into every scene, and never simply rotate through the first few characters by list position. A character belongs in a scene ONLY when the story beat that scene covers actually involves them. Once a character is genuinely introduced, keep referencing them by the SAME name/ID in every later scene they remain part of the story — never invent a new identity for a character who reappears.
+2. "characters"/"charactersPresent" must be the real character names from LOCKED CHARACTER CONTINUITY PROFILES above — never generic labels like "Protagonist", "Companions", "All Characters", or "Lead Explorer". If a scene genuinely has no characters (a pure establishing/environment shot), it is valid to return an empty array.
+3. "dialogue"/"narrator" must be actual story narration or actual character speech for that specific beat — never restate internal camera/blocking instructions (e.g. do not write things like "Continuing smoothly from Scene 1..." or "characters interact naturally..." as if they were spoken lines). Every spoken line needs an explicit speaker, and the same line must never be assigned to more than one character.
+4. Do NOT convert narration into song lyrics unless the project is genuinely a music/rhyme video type. For ordinary Story/Documentary/Educational/Cinematic content, "dialogue" is narration and/or character speech only.
+5. "environment" must describe only the physical setting (terrain, architecture, lighting, weather) — never a slug of the story sentence or the story text itself.
+6. Props referenced in a scene must be objects actually mentioned or implied by that scene's story beat — do not invent unrelated props or place the same generic prop in every scene.
+
 Generate a JSON array of scene objects matching this exact structure:
 [
   {
@@ -664,15 +672,15 @@ Generate a JSON array of scene objects matching this exact structure:
     "timeRange": "00:00 - 00:${avgSecondsPerScene.toString().padStart(2, '0')}",
     "location": "Specific story-derived location and environment setting",
     "timeOfDay": "Time of day (e.g. Dawn / Golden Hour / Noon / Midnight)",
-    "characters": ["Character Name 1"],
-    "charactersPresent": ["Character Name 1"],
+    "characters": ["Only the real character name(s) from LOCKED CHARACTER CONTINUITY PROFILES that this specific story beat actually involves — [] if none"],
+    "charactersPresent": ["Same list as 'characters' above"],
     "characterActions": "Explicit physical actions, blocking, gestures, reactions for this story beat",
-    "environment": "Detailed set dressing, objects, depth, atmosphere in ${settings.visualStyle}",
+    "environment": "Detailed set dressing, objects, depth, atmosphere in ${settings.visualStyle} — physical description only, never the raw story sentence",
     "visualDescription": "Cinematic composition, foreground/background layers, color grading",
-    "dialogue": "${isNoSpokenWords ? 'NONE (No Spoken Dialogue)' : `Exact spoken line or narration in ${settings.language}`}",
+    "dialogue": "${isNoSpokenWords ? 'NONE (No Spoken Dialogue)' : `Exact spoken line or narration in ${settings.language}, prefixed with its speaker (e.g. "Narrator:" or the character's own name) — never internal production/camera notes`}",
     "dialogueVoiceover": "${isNoSpokenWords ? 'NO SPOKEN WORDS. NO NARRATION.' : `Exact spoken line in ${settings.language}`}",
     "spokenDialogueType": "${voiceMode}",
-    "narrator": "${isNoSpokenWords ? 'NONE' : `Narrator line in ${settings.language}`}",
+    "narrator": "${isNoSpokenWords ? 'NONE' : `Narrator line in ${settings.language} — actual story narration only, never a restated camera/blocking instruction`}",
     "camera": "Lens and framing (e.g. 35mm Low-Angle Tracking Shot / 50mm Medium Close-Up)",
     "cameraMovement": "Camera motion (e.g. Smooth forward dolly, slow orbital crane, whip pan)",
     "cameraAngleMotion": "Lens + camera motion combined",
